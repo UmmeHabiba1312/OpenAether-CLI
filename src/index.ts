@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import chalk from "chalk";
+import { loadConfig, getActiveModel, getActiveApiKey } from "./config/index.js";
 
 const BANNER = `
   ┌────────────────────────────────────────┐
@@ -29,14 +30,15 @@ function showHelp(): void {
   console.log("  ANTHROPIC_API_KEY       " + chalk.dim("Anthropic API key"));
   console.log("  GOOGLE_API_KEY          " + chalk.dim("Google Gemini API key"));
 
-  console.log(chalk.dim("\nVersion 0.1.0"));
+  console.log(chalk.dim("\nOpenAether v0.1.0"));
 }
 
 function showVersion(): void {
   console.log("OpenAether v0.1.0");
 }
 
-// CLI entry
+// ─── CLI entry ───────────────────────────────────────────────────────────────
+
 const args = process.argv.slice(2);
 
 if (args.includes("--help") || args.includes("-h")) {
@@ -49,10 +51,33 @@ if (args.includes("--version") || args.includes("-v")) {
   process.exit(0);
 }
 
-// Default: show banner
-console.log(BANNER);
-console.log(chalk.dim("Starting OpenAether..."));
-console.log(chalk.green("✓ Initialized"));
-console.log(chalk.yellow("\nOpenAether is ready!"));
-console.log(chalk.dim("Type /help for available commands, /exit to quit."));
-console.log(chalk.dim("\nNote: Interactive REPL coming in the next phase.\n"));
+// Default mode: load config, show status, prepare for REPL
+async function main(): Promise<void> {
+  console.log(BANNER);
+  console.log(chalk.dim("Starting OpenAether..."));
+
+  // Load (or create) configuration
+  const config = await loadConfig();
+
+  console.log(chalk.green("✓ Configuration loaded"));
+  console.log(`  Provider: ${chalk.cyan(config.provider.active)}`);
+  console.log(`  Model:    ${chalk.cyan(getActiveModel(config))}`);
+
+  const key = getActiveApiKey(config);
+  if (key) {
+    console.log(`  API Key:  ${chalk.green("✓ configured")}`);
+  } else if (config.provider.active !== "ollama") {
+    console.log(`  API Key:  ${chalk.red("✗ not set — set via /config or env var")}`);
+  } else {
+    console.log(`  API Key:  ${chalk.dim("(not needed for Ollama)")}`);
+  }
+
+  console.log(chalk.yellow("\nOpenAether is ready!"));
+  console.log(chalk.dim("Type /help for available commands, /exit to quit."));
+  console.log(chalk.dim("\nNote: Interactive REPL coming in the next phase.\n"));
+}
+
+main().catch((err) => {
+  console.error(chalk.red("Error:"), err);
+  process.exit(1);
+});
