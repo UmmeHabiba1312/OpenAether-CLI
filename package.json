@@ -1,0 +1,27 @@
+{
+  "name": "openaether",
+  "version": "0.1.0",
+  "description": "An open-source AI CLI assistant — works with any LLM provider",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "openaether": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["cli", "ai", "llm", "claude", "openai", "assistant"],
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "cli-spinners": "^3.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.5.0"
+  }
+}
