@@ -2,6 +2,13 @@
 
 import chalk from "chalk";
 import { loadConfig, getActiveModel, getActiveApiKey } from "./config/index.js";
+import { ToolRegistry } from "./tools/registry.js";
+import { readDefinition, readTool } from "./tools/read.js";
+import { writeDefinition, writeTool } from "./tools/write.js";
+import { editDefinition, editTool } from "./tools/edit.js";
+import { bashDefinition, bashTool } from "./tools/bash.js";
+import { globDefinition, globTool } from "./tools/glob.js";
+import { REPL } from "./cli.js";
 
 const BANNER = `
   ┌────────────────────────────────────────┐
@@ -37,6 +44,17 @@ function showVersion(): void {
   console.log("OpenAether v0.1.0");
 }
 
+/**
+ * Register all built-in tools in the tool registry.
+ */
+function registerTools(registry: ToolRegistry): void {
+  registry.register({ ...readDefinition, handler: readTool });
+  registry.register({ ...writeDefinition, handler: writeTool });
+  registry.register({ ...editDefinition, handler: editTool });
+  registry.register({ ...bashDefinition, handler: bashTool });
+  registry.register({ ...globDefinition, handler: globTool });
+}
+
 // ─── CLI entry ───────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
@@ -51,7 +69,7 @@ if (args.includes("--version") || args.includes("-v")) {
   process.exit(0);
 }
 
-// Default mode: load config, show status, prepare for REPL
+// Default mode: load config, register tools, start REPL
 async function main(): Promise<void> {
   console.log(BANNER);
   console.log(chalk.dim("Starting OpenAether..."));
@@ -72,9 +90,17 @@ async function main(): Promise<void> {
     console.log(`  API Key:  ${chalk.dim("(not needed for Ollama)")}`);
   }
 
+  // Register tools
+  const toolRegistry = new ToolRegistry();
+  registerTools(toolRegistry);
+  console.log(chalk.green(`✓ ${toolRegistry.getAll().length} tools registered`));
+
   console.log(chalk.yellow("\nOpenAether is ready!"));
-  console.log(chalk.dim("Type /help for available commands, /exit to quit."));
-  console.log(chalk.dim("\nNote: Interactive REPL coming in the next phase.\n"));
+  console.log(chalk.dim("Type /help for available commands, /exit to quit.\n"));
+
+  // Start the REPL
+  const repl = new REPL(config, toolRegistry);
+  repl.start();
 }
 
 main().catch((err) => {
