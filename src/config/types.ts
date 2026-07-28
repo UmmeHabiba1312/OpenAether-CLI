@@ -1,5 +1,22 @@
 export type ProviderName = "openai" | "anthropic" | "google" | "ollama";
 
+// ─── Tool Types ─────────────────────────────────────────────────────────────
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface ToolResult {
+  content: string;
+  isError?: boolean;
+}
+
+export type ToolHandler = (
+  args: Record<string, unknown>,
+) => Promise<ToolResult>;
+
 export interface ProviderKeys {
   openai?: string;
   anthropic?: string;
