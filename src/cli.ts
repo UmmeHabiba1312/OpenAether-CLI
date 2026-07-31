@@ -1,10 +1,11 @@
 import * as readline from "node:readline";
 import chalk from "chalk";
 import { Spinner } from "./ui/spinner.js";
-import { streamResponse, renderMessage, renderToolResult } from "./ui/render.js";
-import type { Message, StreamChunk } from "./providers/interface.js";
+import { renderMessage } from "./ui/render.js";
+import type { Message } from "./providers/interface.js";
 import type { OpenAetherConfig } from "./config/index.js";
 import { ToolRegistry } from "./tools/registry.js";
+import { SessionManager } from "./session/index.js";
 
 /**
  * REPL — interactive command-line interface for OpenAether.
@@ -14,12 +15,14 @@ export class REPL {
   private spinner: Spinner;
   private config: OpenAetherConfig;
   private toolRegistry: ToolRegistry;
+  private sessionManager: SessionManager;
   private messages: Message[] = [];
   private running = false;
 
   constructor(config: OpenAetherConfig, toolRegistry: ToolRegistry) {
     this.config = config;
     this.toolRegistry = toolRegistry;
+    this.sessionManager = new SessionManager(config);
     this.spinner = new Spinner();
 
     this.rl = readline.createInterface({
@@ -33,6 +36,9 @@ export class REPL {
     this.rl.on("close", () => {
       this.onExit();
     });
+
+    // Auto-create a default session
+    this.sessionManager.create("default");
   }
 
   /**
@@ -48,22 +54,31 @@ export class REPL {
     this.rl.on("line", async (line: string) => {
       const trimmed = line.trim();
 
+      if (!this.running) return;
+
       if (!trimmed) {
-        this.rl.prompt();
+        this.promptSafe();
         return;
       }
 
-      // Handle slash commands
       if (trimmed.startsWith("/")) {
         await this.handleCommand(trimmed);
-        this.rl.prompt();
+        this.promptSafe();
         return;
       }
 
-      // Normal message
       await this.handleMessage(trimmed);
-      this.rl.prompt();
+      this.promptSafe();
     });
+  }
+
+  /**
+   * Safely re-issue the prompt if the REPL is still running.
+   */
+  private promptSafe(): void {
+    if (this.running) {
+      this.rl.prompt();
+    }
   }
 
   /**
@@ -75,28 +90,24 @@ export class REPL {
   }
 
   /**
-   * Send a message and get a response (used by both REPL and programmatic API).
+   * Send a message and get a response.
    */
   async handleMessage(input: string): Promise<void> {
-    // Add user message to history
-    this.messages.push({ role: "user", content: input });
+    const userMsg: Message = { role: "user", content: input };
+    this.messages.push(userMsg);
+    this.sessionManager.appendMessage(userMsg);
     renderMessage("user", input);
 
-    // TODO: Phase 8 — wire up the provider
-    // For now, show a placeholder response
     this.spinner.start("Thinking...");
-
-    // Simulate thinking delay
     await new Promise((resolve) => setTimeout(resolve, 1000));
-
     this.spinner.stop();
 
-    // Placeholder — will be replaced with actual provider call in Phase 8
     const response = `I received your message: "${input}"\n\nFull provider integration coming in Phase 8!`;
-    renderMessage("assistant", response);
-    this.messages.push({ role: "assistant", content: response });
+    const assistantMsg: Message = { role: "assistant", content: response };
 
-    // Auto-save messages (session management coming in Phase 7)
+    renderMessage("assistant", response);
+    this.messages.push(assistantMsg);
+    this.sessionManager.appendMessage(assistantMsg);
   }
 
   /**
@@ -114,6 +125,7 @@ export class REPL {
 
       case "/clear":
         this.messages = [];
+        this.sessionManager.setMessages([]);
         console.log(chalk.green("✓ Conversation history cleared."));
         break;
 
@@ -129,8 +141,13 @@ export class REPL {
         this.showHistory();
         break;
 
+      case "/session":
+        await this.handleSessionCommand(args);
+        break;
+
       case "/exit":
       case "/quit":
+        await this.sessionManager.flush();
         this.stop();
         break;
 
@@ -140,27 +157,100 @@ export class REPL {
     }
   }
 
+  // ── Command handlers ──────────────────────────────────────────────────────
+
   private showHelp(): void {
     console.log(chalk.bold("\nOpenAether Commands:"));
-    console.log("  /help        " + chalk.dim("Show this help message"));
-    console.log("  /clear       " + chalk.dim("Clear conversation history"));
-    console.log("  /model       " + chalk.dim("Show or switch model"));
-    console.log("  /config      " + chalk.dim("Show current configuration"));
-    console.log("  /history     " + chalk.dim("Show conversation history count"));
-    console.log("  /exit        " + chalk.dim("Exit OpenAether"));
+    console.log("  /help          " + chalk.dim("Show this help message"));
+    console.log("  /clear         " + chalk.dim("Clear conversation history"));
+    console.log("  /model         " + chalk.dim("Show or switch model"));
+    console.log("  /config        " + chalk.dim("Show current configuration"));
+    console.log("  /history       " + chalk.dim("Show conversation stats"));
+    console.log("  /session list  " + chalk.dim("List saved sessions"));
+    console.log("  /session save  " + chalk.dim("Save current session"));
+    console.log("  /session load <name>" + chalk.dim("  Load a saved session"));
+    console.log("  /session delete <name>" + chalk.dim("  Delete a session"));
+    console.log("  /exit          " + chalk.dim("Exit OpenAether"));
 
     console.log(chalk.bold("\nHow to use:"));
     console.log("  Type a message and press Enter to chat.");
-    console.log("  Use multi-line mode by ending a line with \\ and pressing Enter.");
     console.log("  Press Ctrl+C to cancel, Ctrl+D to exit.\n");
   }
 
   private handleModelCommand(args: string[]): void {
     if (args.length === 0) {
       console.log(`  Current provider: ${chalk.cyan(this.config.provider.active)}`);
-      console.log(`  Current model:    ${chalk.cyan(this.config.provider.models[this.config.provider.active] || "not set")}`);
+      console.log(`  Current model:    ${chalk.cyan(
+        this.config.provider.models[this.config.provider.active] || "not set"
+      )}`);
     } else {
-      console.log(chalk.yellow("  Model switching will be available when providers are fully integrated."));
+      console.log(chalk.yellow("  Model switching will be available in Phase 8 with full provider integration."));
+    }
+  }
+
+  private async handleSessionCommand(args: string[]): Promise<void> {
+    const sub = args[0]?.toLowerCase();
+
+    switch (sub) {
+      case "list": {
+        const sessions = await this.sessionManager.list();
+        if (sessions.length === 0) {
+          console.log(chalk.dim("  No saved sessions."));
+          return;
+        }
+        console.log(chalk.bold("\nSaved Sessions:"));
+        for (const s of sessions) {
+          const date = new Date(s.updatedAt).toLocaleString();
+          console.log(`  ${chalk.cyan(s.name)}  ${chalk.dim(`${s.messageCount} msgs · ${date}`)}`);
+        }
+        break;
+      }
+
+      case "save": {
+        const name = args[1] || "default";
+        const current = this.sessionManager.getCurrent();
+        if (!current || this.messages.length === 0) {
+          console.log(chalk.yellow("  No messages to save."));
+          return;
+        }
+        current.messages = [...this.messages];
+        current.meta.name = name;
+        await this.sessionManager.save();
+        console.log(chalk.green(`✓ Session saved as "${name}" (${this.messages.length} messages)`));
+        break;
+      }
+
+      case "load": {
+        const name = args[1];
+        if (!name) {
+          console.log(chalk.yellow("  Usage: /session load <name>"));
+          return;
+        }
+        const data = await this.sessionManager.load(name);
+        if (!data) {
+          console.log(chalk.red(`✗ Session "${name}" not found.`));
+          return;
+        }
+        this.messages = data.messages;
+        console.log(chalk.green(`✓ Loaded session "${name}" (${this.messages.length} messages)`));
+        break;
+      }
+
+      case "delete": {
+        const name = args[1];
+        if (!name) {
+          console.log(chalk.yellow("  Usage: /session delete <name>"));
+          return;
+        }
+        const ok = await this.sessionManager.delete(name);
+        console.log(ok
+          ? chalk.green(`✓ Session "${name}" deleted.`)
+          : chalk.red(`✗ Session "${name}" not found.`));
+        break;
+      }
+
+      default:
+        console.log(chalk.yellow("  Usage: /session list | save [name] | load <name> | delete <name>"));
     }
   }
 
@@ -191,9 +281,10 @@ export class REPL {
     console.log(`  Assistant msgs: ${assistantCount}`);
   }
 
-  private onExit(): void {
+  private async onExit(): Promise<void> {
     if (!this.running) return;
     this.running = false;
+    await this.sessionManager.flush();
     console.log(chalk.dim("\nGoodbye! 👋"));
     process.exit(0);
   }
