@@ -2,12 +2,14 @@
 
 import chalk from "chalk";
 import { loadConfig, getActiveModel, getActiveApiKey } from "./config/index.js";
+import { createProvider } from "./providers/registry.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { readDefinition, readTool } from "./tools/read.js";
 import { writeDefinition, writeTool } from "./tools/write.js";
 import { editDefinition, editTool } from "./tools/edit.js";
 import { bashDefinition, bashTool } from "./tools/bash.js";
 import { globDefinition, globTool } from "./tools/glob.js";
+import { ConversationOrchestrator } from "./orchestrator/conversation.js";
 import { REPL } from "./cli.js";
 
 const BANNER = `
@@ -69,12 +71,11 @@ if (args.includes("--version") || args.includes("-v")) {
   process.exit(0);
 }
 
-// Default mode: load config, register tools, start REPL
+// Default mode: load config, build provider, register tools, start REPL
 async function main(): Promise<void> {
   console.log(BANNER);
   console.log(chalk.dim("Starting OpenAether..."));
 
-  // Load (or create) configuration
   const config = await loadConfig();
 
   console.log(chalk.green("✓ Configuration loaded"));
@@ -82,24 +83,32 @@ async function main(): Promise<void> {
   console.log(`  Model:    ${chalk.cyan(getActiveModel(config))}`);
 
   const key = getActiveApiKey(config);
-  if (key) {
-    console.log(`  API Key:  ${chalk.green("✓ configured")}`);
-  } else if (config.provider.active !== "ollama") {
-    console.log(`  API Key:  ${chalk.red("✗ not set — set via /config or env var")}`);
-  } else {
-    console.log(`  API Key:  ${chalk.dim("(not needed for Ollama)")}`);
-  }
 
   // Register tools
   const toolRegistry = new ToolRegistry();
   registerTools(toolRegistry);
   console.log(chalk.green(`✓ ${toolRegistry.getAll().length} tools registered`));
 
+  // Create provider
+  const provider = createProvider(config);
+  const missingKey = !key && config.provider.active !== "ollama";
+  if (missingKey) {
+    console.log(`  API Key:  ${chalk.red("✗ not set")}`);
+    console.log(chalk.dim("  Set the API key env var or edit ~/.openaether/config.json"));
+    console.log(chalk.dim("  AI features won't work until configured.\n"));
+  } else if (config.provider.active !== "ollama") {
+    console.log(`  API Key:  ${chalk.green("✓ configured")}`);
+  } else {
+    console.log(`  API Key:  ${chalk.dim("(not needed for Ollama)")}`);
+  }
+
   console.log(chalk.yellow("\nOpenAether is ready!"));
   console.log(chalk.dim("Type /help for available commands, /exit to quit.\n"));
 
-  // Start the REPL
-  const repl = new REPL(config, toolRegistry);
+  // Build orchestrator and start REPL
+  const orchestrator = new ConversationOrchestrator(provider, toolRegistry, config);
+
+  const repl = new REPL(config, orchestrator);
   repl.start();
 }
 

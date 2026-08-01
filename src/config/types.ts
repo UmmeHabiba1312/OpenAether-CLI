@@ -43,6 +43,10 @@ export interface OpenAetherConfig {
   theme: "dark" | "light";
   /** Last-used session path */
   lastSession?: string;
+  /** Max tokens per response */
+  maxTokens?: number;
+  /** Model temperature */
+  temperature?: number;
 }
 
 export const DEFAULT_CONFIG: OpenAetherConfig = {
@@ -51,13 +55,15 @@ export const DEFAULT_CONFIG: OpenAetherConfig = {
     active: "anthropic",
     models: {
       openai: "gpt-4o",
-      anthropic: "claude-sonnet-4-20250514",
+      anthropic: "claude-sonnet-4-5",
       google: "gemini-2.0-flash",
       ollama: "llama3.2",
     },
   },
   systemPrompt: "You are OpenAether, an open-source AI coding assistant. Help the user with software engineering tasks. Be concise, thorough, and practical.",
   theme: "dark",
+  maxTokens: 4096,
+  temperature: 0.7,
 };
 
 export const CONFIG_DIR = ".openaether";

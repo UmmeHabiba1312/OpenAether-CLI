@@ -1,10 +1,8 @@
 import * as readline from "node:readline";
 import chalk from "chalk";
 import { Spinner } from "./ui/spinner.js";
-import { renderMessage } from "./ui/render.js";
-import type { Message } from "./providers/interface.js";
 import type { OpenAetherConfig } from "./config/index.js";
-import { ToolRegistry } from "./tools/registry.js";
+import { ConversationOrchestrator, type StreamHandler } from "./orchestrator/conversation.js";
 import { SessionManager } from "./session/index.js";
 
 /**
@@ -14,14 +12,13 @@ export class REPL {
   private rl: readline.Interface;
   private spinner: Spinner;
   private config: OpenAetherConfig;
-  private toolRegistry: ToolRegistry;
+  private orchestrator: ConversationOrchestrator;
   private sessionManager: SessionManager;
-  private messages: Message[] = [];
   private running = false;
 
-  constructor(config: OpenAetherConfig, toolRegistry: ToolRegistry) {
+  constructor(config: OpenAetherConfig, orchestrator: ConversationOrchestrator) {
     this.config = config;
-    this.toolRegistry = toolRegistry;
+    this.orchestrator = orchestrator;
     this.sessionManager = new SessionManager(config);
     this.spinner = new Spinner();
 
@@ -37,7 +34,6 @@ export class REPL {
       this.onExit();
     });
 
-    // Auto-create a default session
     this.sessionManager.create("default");
   }
 
@@ -90,24 +86,62 @@ export class REPL {
   }
 
   /**
-   * Send a message and get a response.
+   * Send a message through the orchestrator and stream the response.
    */
   async handleMessage(input: string): Promise<void> {
-    const userMsg: Message = { role: "user", content: input };
-    this.messages.push(userMsg);
-    this.sessionManager.appendMessage(userMsg);
-    renderMessage("user", input);
-
+    console.log("");
     this.spinner.start("Thinking...");
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    this.spinner.stop();
 
-    const response = `I received your message: "${input}"\n\nFull provider integration coming in Phase 8!`;
-    const assistantMsg: Message = { role: "assistant", content: response };
+    const onStream: StreamHandler = (chunk) => {
+      switch (chunk.type) {
+        case "text":
+          // Stop spinner on first text, then stream inline
+          if (this.spinner.isRunning()) {
+            this.spinner.stop();
+            process.stdout.write(chalk.cyan("\nOpenAether › ") + "\n");
+          }
+          process.stdout.write(chunk.delta);
+          break;
 
-    renderMessage("assistant", response);
-    this.messages.push(assistantMsg);
-    this.sessionManager.appendMessage(assistantMsg);
+        case "tool_use":
+          // Tool call requested — show it, keep spinner running for execution
+          this.spinner.setMessage(chalk.dim(`executing ${chunk.name}...`));
+          break;
+
+        case "tool_start":
+          this.spinner.setMessage(chalk.dim(`[Tool] ${chunk.name}...`));
+          break;
+
+        case "tool_end":
+          this.spinner.setMessage(chalk.dim(
+            `[Tool] ${chunk.name} ${chunk.result?.isError ? chalk.red("failed") : chalk.green("✓")}`
+          ));
+          break;
+
+        case "error":
+          if (this.spinner.isRunning()) this.spinner.stop();
+          process.stdout.write(chalk.red(`\n✗ Error: ${chunk.message}\n`));
+          break;
+
+        case "done":
+          if (this.spinner.isRunning()) this.spinner.stop();
+          break;
+      }
+    };
+
+    try {
+      const text = await this.orchestrator.sendMessage(input, onStream);
+      if (this.spinner.isRunning()) this.spinner.stop();
+      process.stdout.write("\n");
+
+      // Persist conversation to session
+      const history = this.orchestrator.getHistory();
+      this.sessionManager.setMessages(history);
+    } catch (err) {
+      if (this.spinner.isRunning()) this.spinner.stop();
+      const message = err instanceof Error ? err.message : String(err);
+      process.stdout.write(chalk.red(`\n✗ Error: ${message}\n`));
+    }
   }
 
   /**
@@ -124,7 +158,7 @@ export class REPL {
         break;
 
       case "/clear":
-        this.messages = [];
+        this.orchestrator.reset();
         this.sessionManager.setMessages([]);
         console.log(chalk.green("✓ Conversation history cleared."));
         break;
@@ -184,7 +218,7 @@ export class REPL {
         this.config.provider.models[this.config.provider.active] || "not set"
       )}`);
     } else {
-      console.log(chalk.yellow("  Model switching will be available in Phase 8 with full provider integration."));
+      console.log(chalk.yellow("  Model switching will be available in Phase 9 with /config."));
     }
   }
 
@@ -208,15 +242,18 @@ export class REPL {
 
       case "save": {
         const name = args[1] || "default";
-        const current = this.sessionManager.getCurrent();
-        if (!current || this.messages.length === 0) {
+        const history = this.orchestrator.getHistory();
+        if (history.length === 0) {
           console.log(chalk.yellow("  No messages to save."));
           return;
         }
-        current.messages = [...this.messages];
-        current.meta.name = name;
+        const current = this.sessionManager.getCurrent();
+        if (current) {
+          current.messages = history;
+          current.meta.name = name;
+        }
         await this.sessionManager.save();
-        console.log(chalk.green(`✓ Session saved as "${name}" (${this.messages.length} messages)`));
+        console.log(chalk.green(`✓ Session saved as "${name}" (${history.length} messages)`));
         break;
       }
 
@@ -231,8 +268,8 @@ export class REPL {
           console.log(chalk.red(`✗ Session "${name}" not found.`));
           return;
         }
-        this.messages = data.messages;
-        console.log(chalk.green(`✓ Loaded session "${name}" (${this.messages.length} messages)`));
+        this.orchestrator.setHistory(data.messages);
+        console.log(chalk.green(`✓ Loaded session "${name}" (${data.messages.length} messages)`));
         break;
       }
 
@@ -259,7 +296,8 @@ export class REPL {
     console.log(`  Provider:  ${chalk.cyan(this.config.provider.active)}`);
     console.log(`  Model:     ${chalk.cyan(this.config.provider.models[this.config.provider.active] || "not set")}`);
     console.log(`  Theme:     ${chalk.cyan(this.config.theme)}`);
-    console.log(`  Messages:  ${this.messages.length} in current session`);
+    console.log(`  Max tokens:${chalk.cyan(this.config.maxTokens)}`);
+    console.log(`  Temp:      ${chalk.cyan(this.config.temperature)}`);
 
     const hasKey = (provider: string) => {
       const keys = this.config.apiKeys as Record<string, string | undefined>;
@@ -274,9 +312,10 @@ export class REPL {
   }
 
   private showHistory(): void {
-    const userCount = this.messages.filter((m) => m.role === "user").length;
-    const assistantCount = this.messages.filter((m) => m.role === "assistant").length;
-    console.log(`  Total messages: ${this.messages.length}`);
+    const history = this.orchestrator.getHistory();
+    const userCount = history.filter((m) => m.role === "user").length;
+    const assistantCount = history.filter((m) => m.role === "assistant").length;
+    console.log(`  Total messages: ${history.length}`);
     console.log(`  User messages:  ${userCount}`);
     console.log(`  Assistant msgs: ${assistantCount}`);
   }
