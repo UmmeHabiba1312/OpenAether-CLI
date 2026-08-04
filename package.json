@@ -7,9 +7,17 @@
   "bin": {
     "openaether": "dist/index.js"
   },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node -e \"const fs=require('fs');const p='dist/index.js';let s=fs.readFileSync(p,'utf8');if(!s.startsWith('#!')){fs.writeFileSync(p,'#!/usr/bin/env node\\n'+s)};fs.chmodSync(p,0o755)\"",
     "start": "node dist/index.js",
     "prepublishOnly": "npm run build"
   },

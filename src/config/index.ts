@@ -81,23 +81,7 @@ async function firstRunSetup(): Promise<OpenAetherConfig> {
     },
   };
 
-  console.log("\n🔧 OpenAether First-Time Setup");
-  console.log("  Config file: " + getConfigPath() + "\n");
-
   return config;
-}
-
-/**
- * Prompt the user (via stdin/stdout) for an API key value.
- * Simple fallback — doesn't use readline to avoid extra deps.
- */
-function promptSync(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    process.stdout.write(question);
-    process.stdin.once("data", (data) => {
-      resolve(data.toString().trim());
-    });
-  });
 }
 
 /**
@@ -123,4 +107,56 @@ export function getActiveApiKey(config: OpenAetherConfig): string | undefined {
     case "ollama":
       return undefined; // Ollama doesn't need an API key
   }
+}
+
+/**
+ * Set an API key for a provider and persist to disk.
+ */
+export async function setApiKey(
+  config: OpenAetherConfig,
+  provider: ProviderName,
+  key: string,
+): Promise<void> {
+  switch (provider) {
+    case "openai":
+      config.apiKeys.openai = key;
+      break;
+    case "anthropic":
+      config.apiKeys.anthropic = key;
+      break;
+    case "google":
+      config.apiKeys.google = key;
+      break;
+    case "ollama":
+      config.apiKeys.ollamaBaseUrl = key;
+      break;
+  }
+  await saveConfig(config);
+}
+
+/**
+ * Switch the active provider and persist to disk.
+ */
+export async function switchProvider(
+  config: OpenAetherConfig,
+  provider: ProviderName,
+  model?: string,
+): Promise<void> {
+  config.provider.active = provider;
+  if (model) {
+    config.provider.models[provider] = model;
+  }
+  await saveConfig(config);
+}
+
+/**
+ * Update a model for a provider and persist to disk.
+ */
+export async function setModel(
+  config: OpenAetherConfig,
+  provider: ProviderName,
+  model: string,
+): Promise<void> {
+  config.provider.models[provider] = model;
+  await saveConfig(config);
 }

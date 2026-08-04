@@ -63,6 +63,27 @@ export class ConversationOrchestrator {
   }
 
   /**
+   * Swap the active provider (e.g. when switching models/providers at runtime).
+   */
+  setProvider(provider: LLMProvider): void {
+    this.provider = provider;
+  }
+
+  /**
+   * Get the active provider instance.
+   */
+  getProvider(): LLMProvider {
+    return this.provider;
+  }
+
+  /**
+   * Get the current model name from the active provider.
+   */
+  getModelName(): string {
+    return this.provider.getModelName();
+  }
+
+  /**
    * Send a message to the LLM and get the final text response.
    * Returns the accumulated text from the final (non-tool) turn.
    */

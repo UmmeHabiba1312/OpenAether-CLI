@@ -1,9 +1,16 @@
 import * as readline from "node:readline";
 import chalk from "chalk";
 import { Spinner } from "./ui/spinner.js";
-import type { OpenAetherConfig } from "./config/index.js";
+import {
+  type OpenAetherConfig,
+  type ProviderName,
+  switchProvider,
+  setModel,
+  setApiKey,
+} from "./config/index.js";
 import { ConversationOrchestrator, type StreamHandler } from "./orchestrator/conversation.js";
 import { SessionManager } from "./session/index.js";
+import { createProvider } from "./providers/registry.js";
 
 /**
  * REPL — interactive command-line interface for OpenAether.
@@ -164,11 +171,15 @@ export class REPL {
         break;
 
       case "/model":
-        this.handleModelCommand(args);
+        await this.handleModelCommand(args);
+        break;
+
+      case "/provider":
+        await this.handleProviderCommand(args);
         break;
 
       case "/config":
-        this.showConfig();
+        await this.handleConfigCommand(args);
         break;
 
       case "/history":
@@ -195,31 +206,77 @@ export class REPL {
 
   private showHelp(): void {
     console.log(chalk.bold("\nOpenAether Commands:"));
-    console.log("  /help          " + chalk.dim("Show this help message"));
-    console.log("  /clear         " + chalk.dim("Clear conversation history"));
-    console.log("  /model         " + chalk.dim("Show or switch model"));
-    console.log("  /config        " + chalk.dim("Show current configuration"));
-    console.log("  /history       " + chalk.dim("Show conversation stats"));
-    console.log("  /session list  " + chalk.dim("List saved sessions"));
-    console.log("  /session save  " + chalk.dim("Save current session"));
+    console.log("  /help             " + chalk.dim("Show this help message"));
+    console.log("  /provider         " + chalk.dim("List or switch provider"));
+    console.log("  /model <name>     " + chalk.dim("Show or set the model"));
+    console.log("  /config           " + chalk.dim("Show configuration"));
+    console.log("  /config key <provider> <key>" + chalk.dim("  Set an API key"));
+    console.log("  /clear            " + chalk.dim("Clear conversation history"));
+    console.log("  /history          " + chalk.dim("Show conversation stats"));
+    console.log("  /session list     " + chalk.dim("List saved sessions"));
+    console.log("  /session save <name>" + chalk.dim("  Save current session"));
     console.log("  /session load <name>" + chalk.dim("  Load a saved session"));
     console.log("  /session delete <name>" + chalk.dim("  Delete a session"));
-    console.log("  /exit          " + chalk.dim("Exit OpenAether"));
+    console.log("  /exit             " + chalk.dim("Exit OpenAether"));
 
     console.log(chalk.bold("\nHow to use:"));
     console.log("  Type a message and press Enter to chat.");
     console.log("  Press Ctrl+C to cancel, Ctrl+D to exit.\n");
   }
 
-  private handleModelCommand(args: string[]): void {
+  private async handleModelCommand(args: string[]): Promise<void> {
     if (args.length === 0) {
       console.log(`  Current provider: ${chalk.cyan(this.config.provider.active)}`);
       console.log(`  Current model:    ${chalk.cyan(
         this.config.provider.models[this.config.provider.active] || "not set"
       )}`);
-    } else {
-      console.log(chalk.yellow("  Model switching will be available in Phase 9 with /config."));
+      console.log(chalk.dim("  Usage: /model <model-name>"));
+      return;
     }
+
+    const provider = this.config.provider.active;
+    await setModel(this.config, provider, args[0]);
+    console.log(chalk.green(`✓ Model set to "${args[0]}" for ${provider}`));
+    this.reloadProvider();
+  }
+
+  private async handleProviderCommand(args: string[]): Promise<void> {
+    const providers: ProviderName[] = ["openai", "anthropic", "google", "ollama"];
+
+    if (args.length === 0) {
+      console.log(chalk.bold("\nAvailable Providers:"));
+      for (const p of providers) {
+        const active = p === this.config.provider.active ? chalk.green(" ✓") : "";
+        const model = this.config.provider.models[p] || "";
+        console.log(`  ${chalk.cyan(p)}${active}  ${chalk.dim(model)}`);
+      }
+      console.log(chalk.dim("\n  Usage: /provider <name>"));
+      return;
+    }
+
+    const name = args[0].toLowerCase() as ProviderName;
+    if (!providers.includes(name)) {
+      console.log(chalk.red(`✗ Unknown provider: ${name}`));
+      console.log(chalk.dim(`  Available: ${providers.join(", ")}`));
+      return;
+    }
+
+    await switchProvider(this.config, name);
+    console.log(chalk.green(`✓ Switched to ${name} provider`));
+    this.reloadProvider();
+  }
+
+  /**
+   * Recreate the provider from current config and swap it into the orchestrator.
+   */
+  private reloadProvider(): void {
+    const provider = createProvider(this.config);
+    if (provider.name === "none") {
+      console.log(chalk.red(`✗ ${provider.getModelName() || "Provider not configured"}`));
+      return;
+    }
+    this.orchestrator.setProvider(provider);
+    console.log(chalk.dim(`  Active model: ${provider.getModelName()}`));
   }
 
   private async handleSessionCommand(args: string[]): Promise<void> {
@@ -291,6 +348,48 @@ export class REPL {
     }
   }
 
+  private async handleConfigCommand(args: string[]): Promise<void> {
+    const sub = args[0]?.toLowerCase();
+
+    if (!sub || sub === "show") {
+      this.showConfig();
+      return;
+    }
+
+    if (sub === "help") {
+      console.log(chalk.bold("\n/config Usage:"));
+      console.log("  /config              " + chalk.dim("Show current configuration"));
+      console.log("  /config key <provider> <key>" + chalk.dim("  Set an API key"));
+      console.log("  /config help         " + chalk.dim("Show this help"));
+      console.log(chalk.dim("\n  Providers: openai, anthropic, google, ollama"));
+      console.log(chalk.dim("  Use /provider to switch, /model to set model.\n"));
+      return;
+    }
+
+    if (sub === "key") {
+      const provider = args[1]?.toLowerCase();
+      const key = args[2];
+      const providers: ProviderName[] = ["openai", "anthropic", "google"];
+
+      if (!provider || !key) {
+        console.log(chalk.yellow("  Usage: /config key <provider> <api-key>"));
+        return;
+      }
+
+      if (!providers.includes(provider as ProviderName)) {
+        console.log(chalk.red(`✗ Unknown provider: ${provider}`));
+        return;
+      }
+
+      await setApiKey(this.config, provider as ProviderName, key);
+      console.log(chalk.green(`✓ ${provider} API key set`));
+      this.reloadProvider();
+      return;
+    }
+
+    console.log(chalk.yellow("  Usage: /config | /config key <provider> <key> | /config help"));
+  }
+
   private showConfig(): void {
     console.log(chalk.bold("\nConfiguration:"));
     console.log(`  Provider:  ${chalk.cyan(this.config.provider.active)}`);
@@ -308,6 +407,7 @@ export class REPL {
     console.log(`  OpenAI:    ${hasKey("openai")}`);
     console.log(`  Anthropic: ${hasKey("anthropic")}`);
     console.log(`  Google:    ${hasKey("google")}`);
+    console.log(`  Ollama:    ${this.config.apiKeys.ollamaBaseUrl ? chalk.green("✓ " + this.config.apiKeys.ollamaBaseUrl) : chalk.dim("not set (defaults to localhost:11434)")}`);
     console.log("");
   }
 
