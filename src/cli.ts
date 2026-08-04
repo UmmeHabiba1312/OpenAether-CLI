@@ -1,6 +1,7 @@
 import * as readline from "node:readline";
 import chalk from "chalk";
 import { Spinner } from "./ui/spinner.js";
+import { MarkdownStream } from "./ui/render.js";
 import {
   type OpenAetherConfig,
   type ProviderName,
@@ -22,6 +23,10 @@ export class REPL {
   private orchestrator: ConversationOrchestrator;
   private sessionManager: SessionManager;
   private running = false;
+  /** True while an AI request is in-flight (used for Ctrl+C cancellation). */
+  private busy = false;
+  /** Abort controller for the current in-flight request. */
+  private currentAbort: AbortController | null = null;
 
   constructor(config: OpenAetherConfig, orchestrator: ConversationOrchestrator) {
     this.config = config;
@@ -45,6 +50,59 @@ export class REPL {
   }
 
   /**
+   * Ask a yes/no confirmation using a single keypress (y/N).
+   */
+  private async askConfirm(question: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const stdin = process.stdin;
+      const wasRaw = stdin.isRaw;
+      stdin.setRawMode(true);
+      stdin.resume();
+      process.stdout.write(`${question} ${chalk.dim("(y/N)")} `);
+
+      const onChar = (char: Buffer) => {
+        const c = char.toString().toLowerCase()[0];
+        stdin.removeListener("data", onChar);
+        stdin.setRawMode(wasRaw);
+        stdin.pause();
+        process.stdout.write("\n");
+        resolve(c === "y");
+      };
+      stdin.once("data", onChar);
+    });
+  }
+
+  /**
+   * Ask for a secret (API key) with masked input — echoes '*' instead of the value.
+   */
+  private async askSecret(question: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      const rl = this.rl as unknown as { _writeToOutput: (s: string) => void };
+      const orig = rl._writeToOutput;
+      const real = process.stdout;
+
+      // Mask typed characters
+      rl._writeToOutput = (s: string) => {
+        if (s === "\n" || s === "\r") {
+          real.write("\n");
+        } else {
+          real.write("*".repeat(s.length));
+        }
+      };
+
+      this.rl.question(question + " ", (answer) => {
+        rl._writeToOutput = orig;
+        real.write("\n");
+        resolve(answer.trim() || null);
+      });
+    });
+  }
+
+  /** Multi-line buffer: accumulates partial input until balanced. */
+  private multiLineBuffer = "";
+  private inMultiLine = false;
+
+  /**
    * Start the REPL loop.
    */
   start(): void {
@@ -54,25 +112,111 @@ export class REPL {
 
     this.rl.prompt();
 
+    // Ctrl+C: cancel in-flight request, otherwise offer to exit
+    this.rl.on("SIGINT", () => {
+      if (this.busy) {
+        this.currentAbort?.abort();
+        this.busy = false;
+        this.spinner.stop();
+        console.log(chalk.yellow("\n⏹ Request cancelled."));
+        this.promptSafe();
+        return;
+      }
+
+      if (this.inMultiLine) {
+        this.multiLineBuffer = "";
+        this.inMultiLine = false;
+        console.log(chalk.dim("\n  Multi-line input cancelled."));
+        this.promptSafe();
+        return;
+      }
+
+      this.stop();
+    });
+
     this.rl.on("line", async (line: string) => {
+      if (!this.running) return;
+
+      // Multi-line mode: accumulate until braces/brackets are balanced
+      if (this.inMultiLine) {
+        this.multiLineBuffer += "\n" + line;
+        if (this.isBalanced(this.multiLineBuffer)) {
+          const full = this.multiLineBuffer;
+          this.multiLineBuffer = "";
+          this.inMultiLine = false;
+          await this.handleLine(full);
+        } else {
+          this.rl.setPrompt(chalk.dim("... ") + chalk.green(""));
+          this.rl.prompt();
+        }
+        return;
+      }
+
       const trimmed = line.trim();
 
-      if (!this.running) return;
+      // Start multi-line if trailing backslash or unclosed brace/bracket
+      if (trimmed.endsWith("\\")) {
+        this.multiLineBuffer = trimmed.slice(0, -1);
+        this.inMultiLine = true;
+        this.rl.setPrompt(chalk.dim("... ") + chalk.green(""));
+        this.rl.prompt();
+        return;
+      }
 
       if (!trimmed) {
         this.promptSafe();
         return;
       }
 
-      if (trimmed.startsWith("/")) {
-        await this.handleCommand(trimmed);
-        this.promptSafe();
+      if (this.needsMoreInput(trimmed)) {
+        this.multiLineBuffer = trimmed;
+        this.inMultiLine = true;
+        this.rl.setPrompt(chalk.dim("... ") + chalk.green(""));
+        this.rl.prompt();
         return;
       }
 
-      await this.handleMessage(trimmed);
-      this.promptSafe();
+      await this.handleLine(trimmed);
     });
+  }
+
+  /**
+   * Process a complete input line (message or command).
+   */
+  private async handleLine(line: string): Promise<void> {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      this.promptSafe();
+      return;
+    }
+
+    if (trimmed.startsWith("/")) {
+      await this.handleCommand(trimmed);
+      this.promptSafe();
+      return;
+    }
+
+    await this.handleMessage(trimmed);
+    this.rl.setPrompt(chalk.green("› ") + chalk.dim("openaether") + " ");
+    this.promptSafe();
+  }
+
+  /**
+   * True if the text has unbalanced open braces/brackets/parens.
+   */
+  private needsMoreInput(text: string): boolean {
+    const open = (text.match(/[{\[(]/g) || []).length;
+    const close = (text.match(/[}\])]/g) || []).length;
+    return open > close;
+  }
+
+  /**
+   * True if braces/brackets are balanced.
+   */
+  private isBalanced(text: string): boolean {
+    const open = (text.match(/[{\[(]/g) || []).length;
+    const close = (text.match(/[}\])]/g) || []).length;
+    return open === close;
   }
 
   /**
@@ -98,6 +242,10 @@ export class REPL {
   async handleMessage(input: string): Promise<void> {
     console.log("");
     this.spinner.start("Thinking...");
+    this.busy = true;
+    this.currentAbort = new AbortController();
+
+    const md = new MarkdownStream();
 
     const onStream: StreamHandler = (chunk) => {
       switch (chunk.type) {
@@ -107,7 +255,7 @@ export class REPL {
             this.spinner.stop();
             process.stdout.write(chalk.cyan("\nOpenAether › ") + "\n");
           }
-          process.stdout.write(chunk.delta);
+          md.write(chunk.delta);
           break;
 
         case "tool_use":
@@ -132,13 +280,15 @@ export class REPL {
 
         case "done":
           if (this.spinner.isRunning()) this.spinner.stop();
+          md.flush();
           break;
       }
     };
 
     try {
-      const text = await this.orchestrator.sendMessage(input, onStream);
+      const text = await this.orchestrator.sendMessage(input, onStream, this.currentAbort.signal);
       if (this.spinner.isRunning()) this.spinner.stop();
+      md.flush();
       process.stdout.write("\n");
 
       // Persist conversation to session
@@ -148,6 +298,9 @@ export class REPL {
       if (this.spinner.isRunning()) this.spinner.stop();
       const message = err instanceof Error ? err.message : String(err);
       process.stdout.write(chalk.red(`\n✗ Error: ${message}\n`));
+    } finally {
+      this.busy = false;
+      this.currentAbort = null;
     }
   }
 
@@ -164,11 +317,17 @@ export class REPL {
         this.showHelp();
         break;
 
-      case "/clear":
+      case "/clear": {
+        const hasMessages = this.orchestrator.getHistory().length > 0;
+        if (hasMessages) {
+          const yes = await this.askConfirm(chalk.yellow("Clear conversation history?"));
+          if (!yes) break;
+        }
         this.orchestrator.reset();
         this.sessionManager.setMessages([]);
         console.log(chalk.green("✓ Conversation history cleared."));
         break;
+      }
 
       case "/model":
         await this.handleModelCommand(args);
@@ -191,10 +350,16 @@ export class REPL {
         break;
 
       case "/exit":
-      case "/quit":
+      case "/quit": {
+        const hasMessages = this.orchestrator.getHistory().length > 0;
+        if (hasMessages) {
+          const yes = await this.askConfirm(chalk.yellow("Exit OpenAether?"));
+          if (!yes) break;
+        }
         await this.sessionManager.flush();
         this.stop();
         break;
+      }
 
       default:
         console.log(chalk.red(`Unknown command: ${command}`));
@@ -367,27 +532,90 @@ export class REPL {
     }
 
     if (sub === "key") {
-      const provider = args[1]?.toLowerCase();
-      const key = args[2];
       const providers: ProviderName[] = ["openai", "anthropic", "google"];
 
-      if (!provider || !key) {
-        console.log(chalk.yellow("  Usage: /config key <provider> <api-key>"));
-        return;
+      let provider = args[1]?.toLowerCase() as ProviderName | undefined;
+
+      // Interactive provider selection if not given
+      if (!provider) {
+        console.log(chalk.dim("\n  Which provider? (openai / anthropic / google)"));
+        console.log(chalk.dim("  1) OpenAI   2) Anthropic   3) Google"));
+        const pick = await this.askSecret("  Enter 1, 2, or 3");
+        const idx = parseInt(pick || "0", 10);
+        if (idx >= 1 && idx <= 3) {
+          provider = providers[idx - 1];
+        } else {
+          console.log(chalk.red("✗ Invalid selection."));
+          return;
+        }
       }
 
-      if (!providers.includes(provider as ProviderName)) {
+      if (!providers.includes(provider)) {
         console.log(chalk.red(`✗ Unknown provider: ${provider}`));
         return;
       }
 
-      await setApiKey(this.config, provider as ProviderName, key);
+      // Interactive key prompt if not given
+      let key: string | undefined = args[2];
+      if (!key) {
+        console.log(chalk.dim(`\n  Enter your ${provider} API key (input is masked):`));
+        key = (await this.askSecret(`  ${provider} API key`)) || undefined;
+      }
+
+      if (!key) {
+        console.log(chalk.yellow("  No key provided — cancelled."));
+        return;
+      }
+
+      await setApiKey(this.config, provider, key);
       console.log(chalk.green(`✓ ${provider} API key set`));
       this.reloadProvider();
       return;
     }
 
-    console.log(chalk.yellow("  Usage: /config | /config key <provider> <key> | /config help"));
+    if (sub === "setup") {
+      await this.interactiveSetup();
+      return;
+    }
+
+    console.log(chalk.yellow("  Usage: /config | /config key <provider> [key] | /config setup | /config help"));
+  }
+
+  /**
+   * Interactive guided setup — walks through API keys for all providers.
+   */
+  private async interactiveSetup(): Promise<void> {
+    console.log(chalk.bold("\n🔧 OpenAether Setup"));
+    const providers: ProviderName[] = ["openai", "anthropic", "google"];
+
+    for (const p of providers) {
+      const existing = this.config.apiKeys[p as keyof typeof this.config.apiKeys];
+      if (existing) {
+        console.log(`  ${chalk.cyan(p)}: already set ${chalk.dim("(skip)")}`);
+        continue;
+      }
+      const yes = await this.askConfirm(`  Set ${p} API key?`);
+      if (!yes) continue;
+      const key = await this.askSecret(`  ${p} API key`);
+      if (key) {
+        await setApiKey(this.config, p, key);
+        console.log(chalk.green(`    ✓ ${p} key set`));
+      }
+    }
+
+    // Ask if using local Ollama
+    const useOllama = await this.askConfirm("  Using local Ollama?");
+    if (useOllama) {
+      const baseUrl = await this.askSecret("  Ollama base URL (default http://localhost:11434)");
+      if (baseUrl) {
+        this.config.apiKeys.ollamaBaseUrl = baseUrl;
+      }
+    }
+
+    await switchProvider(this.config, this.config.provider.active);
+    console.log(chalk.green("\n✓ Setup complete!"));
+    this.showConfig();
+    this.reloadProvider();
   }
 
   private showConfig(): void {

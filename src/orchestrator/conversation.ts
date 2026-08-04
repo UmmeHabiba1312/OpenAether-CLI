@@ -87,20 +87,24 @@ export class ConversationOrchestrator {
    * Send a message to the LLM and get the final text response.
    * Returns the accumulated text from the final (non-tool) turn.
    */
-  async sendMessage(input: string, onStream?: StreamHandler): Promise<string> {
+  async sendMessage(input: string, onStream?: StreamHandler, signal?: AbortSignal): Promise<string> {
     this.messages.push({ role: "user", content: input });
-    return this.converse(0, onStream);
+    return this.converse(0, onStream, signal);
   }
 
   /**
    * Recursive conversation loop:
    * call provider → collect text + tool calls → execute tools → recurse.
    */
-  private async converse(depth: number, onStream?: StreamHandler): Promise<string> {
+  private async converse(depth: number, onStream?: StreamHandler, signal?: AbortSignal): Promise<string> {
     if (depth > MAX_DEPTH) {
       const err = `Maximum conversation depth (${MAX_DEPTH}) reached.`;
       onStream?.({ type: "error", message: err });
       return err;
+    }
+
+    if (signal?.aborted) {
+      return "Request cancelled.";
     }
 
     // Determine tool schemas
@@ -111,6 +115,7 @@ export class ConversationOrchestrator {
       tools,
       maxTokens: this.config.maxTokens,
       temperature: this.config.temperature,
+      signal,
     });
 
     let text = "";
@@ -185,6 +190,6 @@ export class ConversationOrchestrator {
     this.messages.push({ role: "user", content: toolResults });
 
     // Recurse to let the model continue
-    return this.converse(depth + 1, onStream);
+    return this.converse(depth + 1, onStream, signal);
   }
 }
