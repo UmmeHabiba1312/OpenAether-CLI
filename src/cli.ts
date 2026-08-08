@@ -12,6 +12,8 @@ import {
 import { ConversationOrchestrator, type StreamHandler } from "./orchestrator/conversation.js";
 import { SessionManager } from "./session/index.js";
 import { createProvider } from "./providers/registry.js";
+import { SkillManager } from "./skills/index.js";
+import { SpecDrivenDev } from "./spec/spec-driven.js";
 
 /**
  * REPL — interactive command-line interface for OpenAether.
@@ -22,6 +24,7 @@ export class REPL {
   private config: OpenAetherConfig;
   private orchestrator: ConversationOrchestrator;
   private sessionManager: SessionManager;
+  private skillManager: SkillManager;
   private running = false;
   /** True while an AI request is in-flight (used for Ctrl+C cancellation). */
   private busy = false;
@@ -32,6 +35,7 @@ export class REPL {
     this.config = config;
     this.orchestrator = orchestrator;
     this.sessionManager = new SessionManager(config);
+    this.skillManager = new SkillManager();
     this.spinner = new Spinner();
 
     this.rl = readline.createInterface({
@@ -337,6 +341,14 @@ export class REPL {
         await this.handleProviderCommand(args);
         break;
 
+      case "/skill":
+        await this.handleSkillCommand(args);
+        break;
+
+      case "/spec":
+        await this.handleSpecCommand(args);
+        break;
+
       case "/config":
         await this.handleConfigCommand(args);
         break;
@@ -374,6 +386,8 @@ export class REPL {
     console.log("  /help             " + chalk.dim("Show this help message"));
     console.log("  /provider         " + chalk.dim("List or switch provider"));
     console.log("  /model <name>     " + chalk.dim("Show or set the model"));
+    console.log("  /skill            " + chalk.dim("Load/unload skill packages"));
+    console.log("  /spec <desc>      " + chalk.dim("Spec-driven dev workflow"));
     console.log("  /config           " + chalk.dim("Show configuration"));
     console.log("  /config key <provider> <key>" + chalk.dim("  Set an API key"));
     console.log("  /clear            " + chalk.dim("Clear conversation history"));
@@ -450,6 +464,140 @@ export class REPL {
     }
     this.orchestrator.setProvider(provider);
     console.log(chalk.dim(`  Active model: ${provider.getModelName()}`));
+  }
+
+  private async handleSkillCommand(args: string[]): Promise<void> {
+    const sub = args[0]?.toLowerCase();
+
+    switch (sub) {
+      case "list": {
+        const skills = await this.skillManager.list();
+        const active = this.orchestrator.getActiveSkills();
+
+        if (skills.length === 0) {
+          console.log(chalk.dim("  No skills found. Create .md files in ./skills/ or ~/.openaether/skills/"));
+          return;
+        }
+
+        console.log(chalk.bold("\nAvailable Skills:"));
+        for (const s of skills) {
+          const isActive = active.includes(s.name);
+          const marker = isActive ? chalk.green(" ● active") : "";
+          console.log(`  ${chalk.cyan(s.name)}${marker}`);
+          if (s.description) {
+            console.log(`    ${chalk.dim(s.description)}`);
+          }
+        }
+        console.log(chalk.dim("\n  Usage: /skill load <name> | /skill unload <name>"));
+        break;
+      }
+
+      case "load": {
+        const name = args[1]?.toLowerCase();
+        if (!name) {
+          console.log(chalk.yellow("  Usage: /skill load <name>"));
+          return;
+        }
+        const skill = await this.skillManager.find(name);
+        if (!skill) {
+          console.log(chalk.red(`✗ Skill "${name}" not found.`));
+          return;
+        }
+        this.orchestrator.addSkill(skill.name, skill.content);
+        console.log(chalk.green(`✓ Skill "${skill.name}" loaded.`));
+        break;
+      }
+
+      case "unload": {
+        const name = args[1]?.toLowerCase();
+        if (!name) {
+          console.log(chalk.yellow("  Usage: /skill unload <name>"));
+          return;
+        }
+        const removed = this.orchestrator.removeSkill(name);
+        console.log(removed
+          ? chalk.green(`✓ Skill "${name}" unloaded.`)
+          : chalk.yellow(`  Skill "${name}" is not active.`));
+        break;
+      }
+
+      default:
+        console.log(chalk.yellow("  Usage: /skill list | load <name> | unload <name>"));
+    }
+  }
+
+  private async handleSpecCommand(args: string[]): Promise<void> {
+    const description = args.join(" ").trim();
+
+    if (!description) {
+      console.log(chalk.yellow("  Usage: /spec <what do you want to build?>"));
+      console.log(chalk.dim("  e.g. /spec a CLI tool to rename files in bulk"));
+      return;
+    }
+
+    const specDev = new SpecDrivenDev(
+      this.orchestrator.getProvider(),
+      this.orchestrator.getToolRegistry(),
+      this.config,
+    );
+
+    // Step 1: Generate SPEC
+    console.log(chalk.bold("\n📄 Step 1/2 — Writing SPECIFICATION...\n"));
+    const spec = await this.runSpecStep(() =>
+      specDev.writeSpec(description, (c) => this.onSpecChunk(c))
+    );
+
+    // Ask approval for the spec
+    const approveSpec = await this.askConfirm(chalk.yellow("\nApprove this specification?"));
+    if (!approveSpec) {
+      console.log(chalk.yellow("  Spec rejected — /spec done. Adjust and try again."));
+      return;
+    }
+
+    // Step 2: Generate PLAN
+    console.log(chalk.bold("\n📋 Step 2/2 — Creating IMPLEMENTATION PLAN...\n"));
+    const plan = await this.runSpecStep(() =>
+      specDev.createPlan(spec, (c) => this.onSpecChunk(c))
+    );
+
+    const approvePlan = await this.askConfirm(chalk.yellow("\nApprove this implementation plan?"));
+    if (!approvePlan) {
+      console.log(chalk.yellow("  Plan rejected — you can implement manually."));
+      return;
+    }
+
+    // Save both
+    const slug = description.split(/\s+/).slice(0, 3).join("-");
+    const { specPath, planPath } = await specDev.save(spec, plan, slug);
+
+    console.log(chalk.green("\n✅ Spec-driven plan complete!"));
+    console.log(chalk.dim(`  SPEC: ${specPath}`));
+    console.log(chalk.dim(`  PLAN: ${planPath}`));
+    console.log(chalk.dim("\n  Now you can implement — e.g. /impl or work step-by-step."));
+  }
+
+  /**
+   * Run a spec/plan generation step with busy-state tracking.
+   */
+  private async runSpecStep(gen: () => Promise<string>): Promise<string> {
+    this.busy = true;
+    this.currentAbort = new AbortController();
+    try {
+      return await gen();
+    } finally {
+      this.busy = false;
+      this.currentAbort = null;
+    }
+  }
+
+  /** Render spec/plan chunks. */
+  private onSpecChunk(chunk: unknown): void {
+    const c = chunk as { type?: string; delta?: string; content?: string };
+    if (c.type === "text" && c.delta) {
+      process.stdout.write(c.delta);
+    } else if (c.type === "text" && c.content) {
+      process.stdout.write(c.content);
+    }
   }
 
   private async handleSessionCommand(args: string[]): Promise<void> {
@@ -658,6 +806,18 @@ export class REPL {
       console.log(`  ${chalk.cyan(p.padEnd(11))}${hasKey(p)}${active}`);
     }
     console.log(`  ${chalk.cyan("ollama".padEnd(11))}${this.config.apiKeys.ollamaBaseUrl ? chalk.green("✓ " + this.config.apiKeys.ollamaBaseUrl) : chalk.dim("not set (defaults to localhost:11434)")}`);
+
+    // MCP servers
+    const mcpServers = this.config.mcpServers;
+    if (mcpServers && Object.keys(mcpServers).length > 0) {
+      console.log(chalk.bold("\nMCP Servers:"));
+      for (const [name, cfg] of Object.entries(mcpServers)) {
+        console.log(`  ${chalk.cyan(name)}  ${chalk.dim(`${cfg.command} ${cfg.args.join(" ")}`)}`);
+      }
+    } else {
+      console.log(chalk.bold("\nMCP Servers:"));
+      console.log(`  ${chalk.dim("none configured. Add to ~/.openaether/config.json under 'mcpServers'.")}`);
+    }
     console.log("");
   }
 

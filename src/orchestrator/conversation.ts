@@ -34,11 +34,48 @@ export class ConversationOrchestrator {
   private toolRegistry: ToolRegistry;
   private config: OpenAetherConfig;
   private messages: Message[] = [];
+  /** Active skills: name → instruction content (injected into system prompt). */
+  private activeSkills = new Map<string, string>();
 
   constructor(provider: LLMProvider, toolRegistry: ToolRegistry, config: OpenAetherConfig) {
     this.provider = provider;
     this.toolRegistry = toolRegistry;
     this.config = config;
+  }
+
+  /**
+   * Load a skill's instructions into the active context.
+   */
+  addSkill(name: string, instructions: string): void {
+    this.activeSkills.set(name, instructions);
+  }
+
+  /**
+   * Remove a skill from active context.
+   */
+  removeSkill(name: string): boolean {
+    return this.activeSkills.delete(name);
+  }
+
+  /**
+   * List active skill names.
+   */
+  getActiveSkills(): string[] {
+    return Array.from(this.activeSkills.keys());
+  }
+
+  /**
+   * Build the effective system prompt: base config prompt + active skill instructions.
+   */
+  private buildSystemPrompt(): string {
+    const base = this.config.systemPrompt || "";
+    if (this.activeSkills.size === 0) return base;
+
+    const skillBlock = Array.from(this.activeSkills.entries())
+      .map(([name, content]) => `\n\n=== Active Skill: ${name} ===\n${content}`)
+      .join("\n");
+
+    return `${base}\n${skillBlock}`;
   }
 
   /**
@@ -84,6 +121,13 @@ export class ConversationOrchestrator {
   }
 
   /**
+   * Get the tool registry (for building sub-orchestrators).
+   */
+  getToolRegistry(): ToolRegistry {
+    return this.toolRegistry;
+  }
+
+  /**
    * Send a message to the LLM and get the final text response.
    * Returns the accumulated text from the final (non-tool) turn.
    */
@@ -111,7 +155,7 @@ export class ConversationOrchestrator {
     const tools = this.toolRegistry.getAllSchemas();
 
     const chunks = this.provider.chat(this.messages, {
-      system: this.config.systemPrompt,
+      system: this.buildSystemPrompt(),
       tools,
       maxTokens: this.config.maxTokens,
       temperature: this.config.temperature,

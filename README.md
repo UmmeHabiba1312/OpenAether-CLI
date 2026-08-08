@@ -70,6 +70,81 @@ export GOOGLE_API_KEY="AIza..."         # Google Gemini
 | `/session delete <name>` | Delete a session |
 | `/exit` | Exit OpenAether |
 
+## 🔌 MCP Servers
+
+OpenAether supports **Model Context Protocol (MCP) servers**, letting it connect to external tools and services (GitHub, filesystem, web, databases, and more).
+
+Configure MCP servers in `~/.openaether/config.json`:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..." }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/folder"]
+    }
+  }
+}
+```
+
+Each server's tools are automatically loaded at startup and made available to the AI. MCP tools are namespaced by server (e.g. `github_getIssue`, `filesystem_readFile`).
+
+Common servers:
+- `@modelcontextprotocol/server-github` — GitHub repos, issues, PRs
+- `@modelcontextprotocol/server-filesystem` — file operations
+- `@modelcontextprotocol/server-web` — web searches
+- `@modelcontextprotocol/server-postgres` — database queries
+
+## 🎓 Skills
+
+OpenAether supports reusable **skill packages** — markdown instruction sets loaded into the model's context. Create skill files with frontmatter:
+
+```markdown
+---
+name: code-review
+description: Review code for bugs and security issues
+---
+
+Follow these rules when reviewing code: ...
+```
+
+Place skills in `./skills/` (project) or `~/.openaether/skills/` (global), then use them in the REPL:
+
+```
+/skill list          # list available skills
+/skill load <name>   # load a skill
+/skill unload <name> # unload a skill
+```
+
+## 🤖 Subagents
+
+OpenAether supports **subagents** — specialized agents with focused system prompts that the main agent can delegate tasks to.
+
+Built-in subagents:
+- **code-reviewer** — reviews code for bugs, security issues, improvements
+- **researcher** — searches the codebase to answer questions with evidence
+- **file-editor** — makes careful, verified file edits
+
+The main agent can spawn these automatically via the `SpawnSubagent` tool when it detects a task is a good fit (e.g. delegating a long review while continuing the main conversation).
+
+## 📐 Spec-Driven Development
+
+Use `/spec <description>` to run a **spec-driven development** workflow:
+
+1. OpenAether writes a **SPECIFICATION** (overview, goals, requirements, technical approach)
+2. It then creates an **IMPLEMENTATION PLAN** (ordered steps, verification, rollback)
+3. You approve each stage
+4. Both are saved to `.specs/` in your project
+
+```
+/spec a CLI tool to rename files in bulk
+```
+
 ## 🛠️ Tools
 
 OpenAether can call tools on your behalf:

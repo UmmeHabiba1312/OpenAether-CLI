@@ -50,11 +50,22 @@ export interface ProviderSettings {
   models: Partial<Record<ProviderName, string>>;
 }
 
+export interface MCPServerConfig {
+  /** Command to launch the server (e.g. "npx", "node", "python") */
+  command: string;
+  /** Arguments (e.g. ["-y", "@modelcontextprotocol/server-github"]) */
+  args: string[];
+  /** Optional environment variables */
+  env?: Record<string, string>;
+}
+
 export interface OpenAetherConfig {
   /** API keys (stored as plain text — protect this file) */
   apiKeys: ProviderKeys;
   /** Provider and model selection */
   provider: ProviderSettings;
+  /** MCP servers to connect to */
+  mcpServers?: Record<string, MCPServerConfig>;
   /** Custom system prompt (optional) */
   systemPrompt?: string;
   /** UI theme */

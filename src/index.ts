@@ -10,6 +10,8 @@ import { editDefinition, editTool } from "./tools/edit.js";
 import { bashDefinition, bashTool } from "./tools/bash.js";
 import { globDefinition, globTool } from "./tools/glob.js";
 import { ConversationOrchestrator } from "./orchestrator/conversation.js";
+import { MCPManager } from "./mcp/index.js";
+import { makeSpawnSubagentTool } from "./subagents/index.js";
 import { REPL } from "./cli.js";
 
 const BANNER = `
@@ -109,6 +111,19 @@ async function main(): Promise<void> {
     console.log(`  API Key:  ${chalk.dim("(not needed for Ollama)")}`);
   }
 
+  // Connect MCP servers (if configured)
+  const mcp = new MCPManager();
+  const mcpToolCount = await mcp.connectAll(config.mcpServers, toolRegistry);
+  if (mcpToolCount > 0) {
+    console.log(chalk.green(`✓ ${mcpToolCount} MCP tools loaded`));
+  } else if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+    console.log(chalk.dim("  No MCP tools loaded (servers may have failed)."));
+  }
+
+  // Register the SpawnSubagent tool (needs the provider, so do it after creation)
+  toolRegistry.register(makeSpawnSubagentTool(provider, toolRegistry, config));
+  console.log(chalk.green(`✓ ${toolRegistry.getAll().length} tools registered (incl. subagents)`));
+
   console.log(chalk.yellow("\nOpenAether is ready!"));
   console.log(chalk.dim("Type /help for available commands, /exit to quit.\n"));
 
@@ -117,6 +132,11 @@ async function main(): Promise<void> {
 
   const repl = new REPL(config, orchestrator);
   repl.start();
+
+  // Clean shutdown: disconnect MCP servers
+  process.on("exit", () => {
+    void mcp.disconnectAll();
+  });
 }
 
 main().catch((err) => {
