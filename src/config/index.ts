@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   type OpenAetherConfig,
   type ProviderName,
+  type ProviderKeys,
   DEFAULT_CONFIG,
   CONFIG_DIR,
   CONFIG_FILE,
@@ -78,6 +79,13 @@ async function firstRunSetup(): Promise<OpenAetherConfig> {
       openai: process.env.OPENAI_API_KEY || undefined,
       anthropic: process.env.ANTHROPIC_API_KEY || undefined,
       google: process.env.GOOGLE_API_KEY || undefined,
+      openrouter: process.env.OPENROUTER_API_KEY || undefined,
+      groq: process.env.GROQ_API_KEY || undefined,
+      mistral: process.env.MISTRAL_API_KEY || undefined,
+      xai: process.env.XAI_API_KEY || undefined,
+      deepseek: process.env.DEEPSEEK_API_KEY || undefined,
+      qwen: process.env.QWEN_API_KEY || undefined,
+      moonshot: process.env.MOONSHOT_API_KEY || undefined,
     },
   };
 
@@ -93,20 +101,33 @@ export function getActiveModel(config: OpenAetherConfig): string {
 }
 
 /**
+ * Map of provider → (config key field, env var name).
+ */
+const API_KEY_MAP: Record<string, { field: keyof ProviderKeys; env: string }> = {
+  openai: { field: "openai", env: "OPENAI_API_KEY" },
+  anthropic: { field: "anthropic", env: "ANTHROPIC_API_KEY" },
+  google: { field: "google", env: "GOOGLE_API_KEY" },
+  openrouter: { field: "openrouter", env: "OPENROUTER_API_KEY" },
+  groq: { field: "groq", env: "GROQ_API_KEY" },
+  mistral: { field: "mistral", env: "MISTRAL_API_KEY" },
+  xai: { field: "xai", env: "XAI_API_KEY" },
+  deepseek: { field: "deepseek", env: "DEEPSEEK_API_KEY" },
+  qwen: { field: "qwen", env: "QWEN_API_KEY" },
+  moonshot: { field: "moonshot", env: "MOONSHOT_API_KEY" },
+};
+
+/**
  * Get the API key for the active provider.
  */
 export function getActiveApiKey(config: OpenAetherConfig): string | undefined {
   const provider = config.provider.active;
-  switch (provider) {
-    case "openai":
-      return config.apiKeys.openai || process.env.OPENAI_API_KEY;
-    case "anthropic":
-      return config.apiKeys.anthropic || process.env.ANTHROPIC_API_KEY;
-    case "google":
-      return config.apiKeys.google || process.env.GOOGLE_API_KEY;
-    case "ollama":
-      return undefined; // Ollama doesn't need an API key
-  }
+  if (provider === "ollama") return undefined; // no key needed
+
+  const entry = API_KEY_MAP[provider];
+  if (!entry) return undefined;
+
+  const stored = config.apiKeys[entry.field];
+  return stored || process.env[entry.env];
 }
 
 /**
@@ -117,19 +138,13 @@ export async function setApiKey(
   provider: ProviderName,
   key: string,
 ): Promise<void> {
-  switch (provider) {
-    case "openai":
-      config.apiKeys.openai = key;
-      break;
-    case "anthropic":
-      config.apiKeys.anthropic = key;
-      break;
-    case "google":
-      config.apiKeys.google = key;
-      break;
-    case "ollama":
-      config.apiKeys.ollamaBaseUrl = key;
-      break;
+  if (provider === "ollama") {
+    config.apiKeys.ollamaBaseUrl = key;
+  } else {
+    const entry = API_KEY_MAP[provider];
+    if (entry) {
+      config.apiKeys[entry.field] = key;
+    }
   }
   await saveConfig(config);
 }

@@ -406,14 +406,22 @@ export class REPL {
   }
 
   private async handleProviderCommand(args: string[]): Promise<void> {
-    const providers: ProviderName[] = ["openai", "anthropic", "google", "ollama"];
+    const providers: ProviderName[] = [
+      "openai", "anthropic", "google", "ollama",
+      "openrouter", "groq", "mistral", "xai", "deepseek", "qwen", "moonshot",
+    ];
 
     if (args.length === 0) {
       console.log(chalk.bold("\nAvailable Providers:"));
       for (const p of providers) {
         const active = p === this.config.provider.active ? chalk.green(" ✓") : "";
         const model = this.config.provider.models[p] || "";
-        console.log(`  ${chalk.cyan(p)}${active}  ${chalk.dim(model)}`);
+        const keySet = p !== "ollama" && this.config.apiKeys[p as keyof typeof this.config.apiKeys]
+          ? chalk.green(" key✓")
+          : p === "ollama"
+            ? chalk.dim(" (local)")
+            : chalk.dim("");
+        console.log(`  ${chalk.cyan(p)}${active}${keySet}  ${chalk.dim(model)}`);
       }
       console.log(chalk.dim("\n  Usage: /provider <name>"));
       return;
@@ -532,17 +540,22 @@ export class REPL {
     }
 
     if (sub === "key") {
-      const providers: ProviderName[] = ["openai", "anthropic", "google"];
+      const providers: ProviderName[] = [
+        "openai", "anthropic", "google", "openrouter",
+        "groq", "mistral", "xai", "deepseek", "qwen", "moonshot",
+      ];
 
       let provider = args[1]?.toLowerCase() as ProviderName | undefined;
 
       // Interactive provider selection if not given
       if (!provider) {
-        console.log(chalk.dim("\n  Which provider? (openai / anthropic / google)"));
-        console.log(chalk.dim("  1) OpenAI   2) Anthropic   3) Google"));
-        const pick = await this.askSecret("  Enter 1, 2, or 3");
+        console.log(chalk.dim("\n  Which provider?"));
+        providers.forEach((p, i) => {
+          console.log(chalk.dim(`  ${i + 1}) ${p}`));
+        });
+        const pick = await this.askSecret(`  Enter 1-${providers.length}`);
         const idx = parseInt(pick || "0", 10);
-        if (idx >= 1 && idx <= 3) {
+        if (idx >= 1 && idx <= providers.length) {
           provider = providers[idx - 1];
         } else {
           console.log(chalk.red("✗ Invalid selection."));
@@ -586,7 +599,10 @@ export class REPL {
    */
   private async interactiveSetup(): Promise<void> {
     console.log(chalk.bold("\n🔧 OpenAether Setup"));
-    const providers: ProviderName[] = ["openai", "anthropic", "google"];
+    const providers: ProviderName[] = [
+      "openai", "anthropic", "google", "openrouter",
+      "groq", "mistral", "xai", "deepseek", "qwen", "moonshot",
+    ];
 
     for (const p of providers) {
       const existing = this.config.apiKeys[p as keyof typeof this.config.apiKeys];
@@ -631,11 +647,17 @@ export class REPL {
       return keys[provider] ? chalk.green("✓ set") : chalk.dim("not set");
     };
 
+    const keyProviders = [
+      "openai", "anthropic", "google", "openrouter",
+      "groq", "mistral", "xai", "deepseek", "qwen", "moonshot",
+    ];
+
     console.log(chalk.bold("\nAPI Keys:"));
-    console.log(`  OpenAI:    ${hasKey("openai")}`);
-    console.log(`  Anthropic: ${hasKey("anthropic")}`);
-    console.log(`  Google:    ${hasKey("google")}`);
-    console.log(`  Ollama:    ${this.config.apiKeys.ollamaBaseUrl ? chalk.green("✓ " + this.config.apiKeys.ollamaBaseUrl) : chalk.dim("not set (defaults to localhost:11434)")}`);
+    for (const p of keyProviders) {
+      const active = p === this.config.provider.active ? chalk.dim(" (active)") : "";
+      console.log(`  ${chalk.cyan(p.padEnd(11))}${hasKey(p)}${active}`);
+    }
+    console.log(`  ${chalk.cyan("ollama".padEnd(11))}${this.config.apiKeys.ollamaBaseUrl ? chalk.green("✓ " + this.config.apiKeys.ollamaBaseUrl) : chalk.dim("not set (defaults to localhost:11434)")}`);
     console.log("");
   }
 

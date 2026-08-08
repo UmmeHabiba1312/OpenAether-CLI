@@ -1,4 +1,15 @@
-export type ProviderName = "openai" | "anthropic" | "google" | "ollama";
+export type ProviderName =
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "ollama"
+  | "openrouter"
+  | "groq"
+  | "mistral"
+  | "xai"
+  | "deepseek"
+  | "qwen"
+  | "moonshot";
 
 // ─── Tool Types ─────────────────────────────────────────────────────────────
 
@@ -21,6 +32,13 @@ export interface ProviderKeys {
   openai?: string;
   anthropic?: string;
   google?: string;
+  openrouter?: string;
+  groq?: string;
+  mistral?: string;
+  xai?: string;
+  deepseek?: string;
+  qwen?: string;
+  moonshot?: string;
   /** Base URL for Ollama (default: http://localhost:11434) */
   ollamaBaseUrl?: string;
 }
@@ -58,6 +76,13 @@ export const DEFAULT_CONFIG: OpenAetherConfig = {
       anthropic: "claude-sonnet-4-5",
       google: "gemini-2.0-flash",
       ollama: "llama3.2",
+      openrouter: "anthropic/claude-sonnet-4-5",
+      groq: "llama-3.3-70b-versatile",
+      mistral: "mistral-large-latest",
+      xai: "grok-2-latest",
+      deepseek: "deepseek-chat",
+      qwen: "qwen-max",
+      moonshot: "kimi-k2-0711-preview",
     },
   },
   systemPrompt: "You are OpenAether, an open-source AI coding assistant. Help the user with software engineering tasks. Be concise, thorough, and practical.",

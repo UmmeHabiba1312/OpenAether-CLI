@@ -89,7 +89,28 @@ Just ask in natural language: *"create a file called hello.py that prints hello 
 | **OpenAI** | Required | GPT-4o, GPT-4, GPT-3.5 |
 | **Anthropic** | Required | Claude Sonnet, Opus, Haiku |
 | **Google Gemini** | Required | Gemini 2.0 Flash, 1.5 Pro |
+| **OpenRouter** | Required | 300+ models from one key |
+| **Groq** | Required | Fast Llama inference |
+| **Mistral** | Required | Mistral Large/Medium |
+| **xAI** | Required | Grok models |
+| **DeepSeek** | Required | deepseek-chat / reasoner |
+| **Qwen** | Required | qwen-max / plus |
+| **Moonshot (Kimi)** | Required | Kimi + Kimi Coding |
 | **Ollama** | Not needed | Local models (Llama, Qwen, etc.) |
+
+### Environment variables
+| Provider | Env Var |
+|----------|---------|
+| OpenAI | `OPENAI_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| Google | `GOOGLE_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+| Groq | `GROQ_API_KEY` |
+| Mistral | `MISTRAL_API_KEY` |
+| xAI | `XAI_API_KEY` |
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| Qwen | `QWEN_API_KEY` |
+| Moonshot | `MOONSHOT_API_KEY` |
 
 ## 📁 Project Structure
 

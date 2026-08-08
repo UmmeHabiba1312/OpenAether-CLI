@@ -35,9 +35,16 @@ function showHelp(): void {
   console.log("  /exit       " + chalk.dim("Exit OpenAether"));
 
   console.log(chalk.bold("\nEnvironment Variables:"));
-  console.log("  OPENAI_API_KEY          " + chalk.dim("OpenAI API key"));
-  console.log("  ANTHROPIC_API_KEY       " + chalk.dim("Anthropic API key"));
-  console.log("  GOOGLE_API_KEY          " + chalk.dim("Google Gemini API key"));
+  console.log("  OPENAI_API_KEY          " + chalk.dim("OpenAI"));
+  console.log("  ANTHROPIC_API_KEY       " + chalk.dim("Anthropic Claude"));
+  console.log("  GOOGLE_API_KEY          " + chalk.dim("Google Gemini"));
+  console.log("  OPENROUTER_API_KEY      " + chalk.dim("OpenRouter (300+ models)"));
+  console.log("  GROQ_API_KEY            " + chalk.dim("Groq"));
+  console.log("  MISTRAL_API_KEY         " + chalk.dim("Mistral"));
+  console.log("  XAI_API_KEY             " + chalk.dim("xAI (Grok)"));
+  console.log("  DEEPSEEK_API_KEY        " + chalk.dim("DeepSeek"));
+  console.log("  QWEN_API_KEY            " + chalk.dim("Qwen"));
+  console.log("  MOONSHOT_API_KEY        " + chalk.dim("Moonshot (Kimi)"));
 
   console.log(chalk.dim("\nOpenAether v0.1.0"));
 }
