@@ -184,6 +184,19 @@ export class OpenAIProvider extends LLMProvider {
         }
       }
 
+      // Some providers omit finish_reason="tool_calls" — flush any pending calls
+      if (toolCallsInProgress.size > 0) {
+        for (const acc of toolCallsInProgress.values()) {
+          let input: Record<string, unknown> = {};
+          try {
+            input = acc.args ? JSON.parse(acc.args) : {};
+          } catch {
+            input = {};
+          }
+          yield { type: "tool_use", id: acc.id, name: acc.name, input };
+        }
+      }
+
       yield { type: "done" };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

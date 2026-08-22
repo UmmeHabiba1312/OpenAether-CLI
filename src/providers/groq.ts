@@ -5,7 +5,7 @@ import { OpenAICompatProvider } from "./openai-compat.js";
  * Default model: llama-3.3-70b-versatile
  */
 export class GroqProvider extends OpenAICompatProvider {
-  constructor(apiKey: string, model = "llama-3.3-70b-versatile") {
-    super("groq", apiKey, model, "https://api.groq.com/openai/v1");
+  constructor(apiKey: string, model = "llama-3.3-70b-versatile", baseUrl?: string) {
+    super("groq", apiKey, model, baseUrl || "https://api.groq.com/openai/v1");
   }
 }

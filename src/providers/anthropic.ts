@@ -107,7 +107,8 @@ export class AnthropicProvider extends LLMProvider {
           max_tokens: options.maxTokens || 4096,
           system: options.system || "",
           messages: anthropicMessages,
-          tools,
+          tools: tools?.length ? tools : undefined,
+          temperature: options.temperature,
         },
         { signal: options.signal as AbortSignal }
       );

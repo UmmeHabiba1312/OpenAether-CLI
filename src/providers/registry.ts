@@ -1,5 +1,6 @@
-import type { OpenAetherConfig, ProviderName } from "../config/types.js";
+import type { OpenAetherConfig, ProviderName, ProviderKeys } from "../config/types.js";
 import { LLMProvider, type StreamChunk } from "./interface.js";
+import { OpenAICompatProvider } from "./openai-compat.js";
 import { OpenAIProvider } from "./openai.js";
 import { AnthropicProvider } from "./anthropic.js";
 import { GoogleProvider } from "./google.js";
@@ -11,23 +12,143 @@ import { XaiProvider } from "./xai.js";
 import { DeepSeekProvider } from "./deepseek.js";
 import { QwenProvider } from "./qwen.js";
 import { MoonshotProvider } from "./moonshot.js";
+import { TogetherProvider } from "./together.js";
+import { CerebrasProvider } from "./cerebras.js";
+import { FireworksProvider } from "./fireworks.js";
+import { NvidiaProvider } from "./nvidia.js";
+import { PerplexityProvider } from "./perplexity.js";
+import { LMStudioProvider } from "./lmstudio.js";
 
-/** All providers that need an API key (for /config prompts & validation). */
-export const KEY_PROVIDERS: ProviderName[] = [
-  "openai",
-  "anthropic",
-  "google",
-  "openrouter",
-  "groq",
-  "mistral",
-  "xai",
-  "deepseek",
-  "qwen",
-  "moonshot",
+/**
+ * A provider definition. Adding a new provider = adding one row here plus a
+ * small subclass (for OpenAI-compatible APIs) or a full implementation.
+ */
+interface ProviderDef {
+  name: ProviderName;
+  label: string;
+  /** Environment variable holding the API key (undefined if keyless). */
+  envVar?: string;
+  requiresKey: boolean;
+  /** Build a provider instance for the given config. Key presence is pre-checked. */
+  create: (config: OpenAetherConfig) => LLMProvider;
+}
+
+/**
+ * Helper for OpenAI-compatible providers: reads the API key, model, and an
+ * optional base URL override (config.provider.baseUrls[name]) and constructs
+ * the provider. `make` is the subclass constructor.
+ */
+function openaiCompatDef(
+  name: ProviderName,
+  label: string,
+  envVar: string,
+  make: (key: string, model: string, baseUrl?: string) => LLMProvider,
+): ProviderDef {
+  return {
+    name,
+    label,
+    envVar,
+    requiresKey: true,
+    create: (config) => {
+      const key = config.apiKeys[name as keyof ProviderKeys] || process.env[envVar] || "";
+      const model = config.provider.models[name] || "";
+      const baseUrl = config.provider.baseUrls?.[name];
+      return make(key, model, baseUrl);
+    },
+  };
+}
+
+/** All supported providers, in display order. */
+const PROVIDER_DEFS: ProviderDef[] = [
+  {
+    name: "openai",
+    label: "OpenAI",
+    envVar: "OPENAI_API_KEY",
+    requiresKey: true,
+    create: (config) => {
+      const key = config.apiKeys.openai || process.env.OPENAI_API_KEY || "";
+      return new OpenAIProvider(key, config.provider.models.openai || "", config.provider.baseUrls?.openai);
+    },
+  },
+  {
+    name: "anthropic",
+    label: "Anthropic",
+    envVar: "ANTHROPIC_API_KEY",
+    requiresKey: true,
+    create: (config) => {
+      const key = config.apiKeys.anthropic || process.env.ANTHROPIC_API_KEY || "";
+      return new AnthropicProvider(key, config.provider.models.anthropic || "");
+    },
+  },
+  {
+    name: "google",
+    label: "Google Gemini",
+    envVar: "GOOGLE_API_KEY",
+    requiresKey: true,
+    create: (config) => {
+      const key = config.apiKeys.google || process.env.GOOGLE_API_KEY || "";
+      return new GoogleProvider(key, config.provider.models.google || "");
+    },
+  },
+  {
+    name: "ollama",
+    label: "Ollama (local)",
+    requiresKey: false,
+    create: (config) => {
+      const baseUrl = config.apiKeys.ollamaBaseUrl || "http://localhost:11434";
+      return new OllamaProvider(config.provider.models.ollama || "", baseUrl);
+    },
+  },
+  openaiCompatDef("openrouter", "OpenRouter", "OPENROUTER_API_KEY", (k, m, b) => new OpenRouterProvider(k, m, b)),
+  openaiCompatDef("groq", "Groq", "GROQ_API_KEY", (k, m, b) => new GroqProvider(k, m, b)),
+  openaiCompatDef("mistral", "Mistral", "MISTRAL_API_KEY", (k, m, b) => new MistralProvider(k, m, b)),
+  openaiCompatDef("xai", "xAI (Grok)", "XAI_API_KEY", (k, m, b) => new XaiProvider(k, m, b)),
+  openaiCompatDef("deepseek", "DeepSeek", "DEEPSEEK_API_KEY", (k, m, b) => new DeepSeekProvider(k, m, b)),
+  openaiCompatDef("qwen", "Qwen", "QWEN_API_KEY", (k, m, b) => new QwenProvider(k, m, b)),
+  openaiCompatDef("moonshot", "Moonshot (Kimi)", "MOONSHOT_API_KEY", (k, m, b) => new MoonshotProvider(k, m, b)),
+  openaiCompatDef("together", "Together AI", "TOGETHER_API_KEY", (k, m, b) => new TogetherProvider(k, m, b)),
+  openaiCompatDef("cerebras", "Cerebras", "CEREBRAS_API_KEY", (k, m, b) => new CerebrasProvider(k, m, b)),
+  openaiCompatDef("fireworks", "Fireworks AI", "FIREWORKS_API_KEY", (k, m, b) => new FireworksProvider(k, m, b)),
+  openaiCompatDef("nvidia", "NVIDIA NIM", "NVIDIA_API_KEY", (k, m, b) => new NvidiaProvider(k, m, b)),
+  openaiCompatDef("perplexity", "Perplexity", "PERPLEXITY_API_KEY", (k, m, b) => new PerplexityProvider(k, m, b)),
+  {
+    name: "lmstudio",
+    label: "LM Studio (local)",
+    requiresKey: false,
+    create: (config) => {
+      const baseUrl = config.provider.baseUrls?.lmstudio || "http://localhost:1234/v1";
+      return new LMStudioProvider("not-needed", config.provider.models.lmstudio || "", baseUrl);
+    },
+  },
+  {
+    name: "custom",
+    label: "Custom OpenAI-compatible",
+    envVar: "CUSTOM_API_KEY",
+    requiresKey: true,
+    create: (config) => {
+      const key = config.apiKeys.custom || process.env.CUSTOM_API_KEY || "";
+      const baseUrl =
+        config.provider.baseUrls?.custom ||
+        config.apiKeys.customBaseUrl ||
+        "http://localhost:8080/v1";
+      const model = config.provider.models.custom || "";
+      return new OpenAICompatProvider("custom", key, model, baseUrl);
+    },
+  },
 ];
 
+/** Providers that need an API key (for /config prompts & validation). */
+export const KEY_PROVIDERS: ProviderName[] = PROVIDER_DEFS
+  .filter((d) => d.requiresKey)
+  .map((d) => d.name);
+
 /** Providers that don't require an API key. */
-export const KEYLESS_PROVIDERS: ProviderName[] = ["ollama"];
+export const KEYLESS_PROVIDERS: ProviderName[] = PROVIDER_DEFS
+  .filter((d) => !d.requiresKey)
+  .map((d) => d.name);
+
+/** All provider names. */
+export const ALL_PROVIDERS: ProviderName[] = PROVIDER_DEFS.map((d) => d.name);
 
 /**
  * Stub provider used when no real provider can be created (missing API key).
@@ -40,6 +161,11 @@ export class NullProvider extends LLMProvider {
   constructor(reason: string) {
     super();
     this.reason = reason;
+  }
+
+  /** The human-readable reason the provider couldn't be created. */
+  getReason(): string {
+    return this.reason;
   }
 
   getModelName(): string {
@@ -65,78 +191,20 @@ export class NullProvider extends LLMProvider {
  * Returns a NullProvider if the required API key is missing.
  */
 export function createProvider(config: OpenAetherConfig): LLMProvider {
-  const provider = config.provider.active;
-  const model = config.provider.models[provider] || "";
-
-  switch (provider) {
-    case "openai": {
-      const key = config.apiKeys.openai;
-      if (!key) return new NullProvider(providerMissingKeyMessage(provider));
-      return new OpenAIProvider(key, model);
-    }
-
-    case "anthropic": {
-      const key = config.apiKeys.anthropic;
-      if (!key) return new NullProvider(providerMissingKeyMessage(provider));
-      return new AnthropicProvider(key, model);
-    }
-
-    case "google": {
-      const key = config.apiKeys.google;
-      if (!key) return new NullProvider(providerMissingKeyMessage(provider));
-      return new GoogleProvider(key, model);
-    }
-
-    case "ollama": {
-      const baseUrl = config.apiKeys.ollamaBaseUrl || "http://localhost:11434";
-      return new OllamaProvider(model, baseUrl);
-    }
-
-    case "openrouter": {
-      const key = config.apiKeys.openrouter;
-      if (!key) return new NullProvider(providerMissingKeyMessage(provider));
-      return new OpenRouterProvider(key, model);
-    }
-
-    case "groq": {
-      const key = config.apiKeys.groq;
-      if (!key) return new NullProvider(providerMissingKeyMessage(provider));
-      return new GroqProvider(key, model);
-    }
-
-    case "mistral": {
-      const key = config.apiKeys.mistral;
-      if (!key) return new NullProvider(providerMissingKeyMessage(provider));
-      return new MistralProvider(key, model);
-    }
-
-    case "xai": {
-      const key = config.apiKeys.xai;
-      if (!key) return new NullProvider(providerMissingKeyMessage(provider));
-      return new XaiProvider(key, model);
-    }
-
-    case "deepseek": {
-      const key = config.apiKeys.deepseek;
-      if (!key) return new NullProvider(providerMissingKeyMessage(provider));
-      return new DeepSeekProvider(key, model);
-    }
-
-    case "qwen": {
-      const key = config.apiKeys.qwen;
-      if (!key) return new NullProvider(providerMissingKeyMessage(provider));
-      return new QwenProvider(key, model);
-    }
-
-    case "moonshot": {
-      const key = config.apiKeys.moonshot;
-      if (!key) return new NullProvider(providerMissingKeyMessage(provider));
-      return new MoonshotProvider(key, model);
-    }
-
-    default:
-      return new NullProvider(`Unknown provider: ${provider}`);
+  const def = PROVIDER_DEFS.find((d) => d.name === config.provider.active);
+  if (!def) {
+    return new NullProvider(`Unknown provider: ${config.provider.active}`);
   }
+
+  if (def.requiresKey) {
+    const key = config.apiKeys[def.name as keyof ProviderKeys];
+    const envKey = def.envVar ? process.env[def.envVar] : undefined;
+    if (!key && !envKey) {
+      return new NullProvider(providerMissingKeyMessage(def.name));
+    }
+  }
+
+  return def.create(config);
 }
 
 /**
@@ -150,34 +218,10 @@ export function providerMissingKeyMessage(provider: string): string {
   return `${providerLabel(provider)} API key is not set. ${hint}`;
 }
 
-function getEnvVar(provider: string): string | null {
-  const map: Record<string, string> = {
-    openai: "OPENAI_API_KEY",
-    anthropic: "ANTHROPIC_API_KEY",
-    google: "GOOGLE_API_KEY",
-    openrouter: "OPENROUTER_API_KEY",
-    groq: "GROQ_API_KEY",
-    mistral: "MISTRAL_API_KEY",
-    xai: "XAI_API_KEY",
-    deepseek: "DEEPSEEK_API_KEY",
-    qwen: "QWEN_API_KEY",
-    moonshot: "MOONSHOT_API_KEY",
-  };
-  return map[provider] ?? null;
+export function getEnvVar(provider: string): string | null {
+  return PROVIDER_DEFS.find((d) => d.name === provider)?.envVar ?? null;
 }
 
-function providerLabel(provider: string): string {
-  const map: Record<string, string> = {
-    openai: "OpenAI",
-    anthropic: "Anthropic",
-    google: "Google Gemini",
-    openrouter: "OpenRouter",
-    groq: "Groq",
-    mistral: "Mistral",
-    xai: "xAI (Grok)",
-    deepseek: "DeepSeek",
-    qwen: "Qwen",
-    moonshot: "Moonshot (Kimi)",
-  };
-  return map[provider] ?? provider;
+export function providerLabel(provider: string): string {
+  return PROVIDER_DEFS.find((d) => d.name === provider)?.label ?? provider;
 }

@@ -1,4 +1,5 @@
 import * as readline from "node:readline";
+import { resolve } from "node:path";
 import chalk from "chalk";
 import { Spinner } from "./ui/spinner.js";
 import { MarkdownStream } from "./ui/render.js";
@@ -11,9 +12,13 @@ import {
 } from "./config/index.js";
 import { ConversationOrchestrator, type StreamHandler } from "./orchestrator/conversation.js";
 import { SessionManager } from "./session/index.js";
-import { createProvider } from "./providers/registry.js";
+import { createProvider, NullProvider, ALL_PROVIDERS, KEY_PROVIDERS } from "./providers/registry.js";
 import { SkillManager } from "./skills/index.js";
 import { SpecDrivenDev } from "./spec/spec-driven.js";
+import { MemoryManager } from "./memory/index.js";
+import { decide, formatRules } from "./permissions/index.js";
+import type { TaskManager } from "./tasks/index.js";
+import type { PermissionConfig } from "./config/types.js";
 
 /**
  * REPL — interactive command-line interface for OpenAether.
@@ -25,18 +30,34 @@ export class REPL {
   private orchestrator: ConversationOrchestrator;
   private sessionManager: SessionManager;
   private skillManager: SkillManager;
+  private memoryManager: MemoryManager;
+  private permissions: PermissionConfig;
+  private taskManager: TaskManager | null;
   private running = false;
   /** True while an AI request is in-flight (used for Ctrl+C cancellation). */
   private busy = false;
   /** Abort controller for the current in-flight request. */
   private currentAbort: AbortController | null = null;
 
-  constructor(config: OpenAetherConfig, orchestrator: ConversationOrchestrator) {
+  constructor(
+    config: OpenAetherConfig,
+    orchestrator: ConversationOrchestrator,
+    permissions: PermissionConfig = {},
+    taskManager: TaskManager | null = null,
+  ) {
     this.config = config;
     this.orchestrator = orchestrator;
     this.sessionManager = new SessionManager(config);
     this.skillManager = new SkillManager();
+    this.memoryManager = new MemoryManager();
+    this.permissions = permissions;
+    this.taskManager = taskManager;
     this.spinner = new Spinner();
+
+    // Gate tool execution behind user approval
+    orchestrator.setApprovalHandler(async (toolName, args) =>
+      this.askApproval(toolName, args)
+    );
 
     this.rl = readline.createInterface({
       input: process.stdin,
@@ -74,6 +95,48 @@ export class REPL {
       };
       stdin.once("data", onChar);
     });
+  }
+
+  /**
+   * Ask the user to approve a tool call before it executes.
+   * First checks permission rules (allow → auto-approve, deny → block),
+   * otherwise shows the tool name + args and asks y/N.
+   */
+  private async askApproval(
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<boolean> {
+    // Stop any running spinner so the prompt renders cleanly
+    if (this.spinner.isRunning()) this.spinner.stop();
+
+    // Permission rules
+    const decision = decide(this.permissions, toolName, args);
+    if (decision === "allow") {
+      console.log(chalk.dim(`  ✓ ${chalk.cyan(toolName)} auto-approved (permission rule)`));
+      return true;
+    }
+    if (decision === "deny") {
+      console.log(chalk.red(`  ✗ ${chalk.cyan(toolName)} blocked by permission rules`));
+      return false;
+    }
+
+    const risk = toolName === "Bash" ? chalk.red("HIGH") : chalk.yellow("review");
+    console.log(chalk.dim(`\n  ── Tool: ${chalk.cyan(toolName)}  (risk: ${risk})`));
+
+    // Show a compact summary of arguments
+    const summary = Object.entries(args)
+      .map(([k, v]) => {
+        const val = typeof v === "string" ? v : JSON.stringify(v);
+        const truncated = val.length > 120 ? val.slice(0, 120) + "…" : val;
+        return `    ${chalk.dim(k)}: ${truncated}`;
+      })
+      .join("\n");
+    if (summary) {
+      console.log(summary);
+    }
+
+    const approved = await this.askConfirm(chalk.yellow(`Allow ${toolName}?`));
+    return approved;
   }
 
   /**
@@ -349,8 +412,36 @@ export class REPL {
         await this.handleSpecCommand(args);
         break;
 
+      case "/init":
+        await this.handleInitCommand(args);
+        break;
+
+      case "/cost":
+        this.showCost();
+        break;
+
       case "/config":
         await this.handleConfigCommand(args);
+        break;
+
+      case "/permissions":
+        this.showPermissions();
+        break;
+
+      case "/remember":
+        await this.handleRememberCommand(args);
+        break;
+
+      case "/memory":
+        await this.handleMemoryCommand(args);
+        break;
+
+      case "/compact":
+        await this.handleCompactCommand();
+        break;
+
+      case "/tasks":
+        this.showTasks();
         break;
 
       case "/history":
@@ -388,8 +479,14 @@ export class REPL {
     console.log("  /model <name>     " + chalk.dim("Show or set the model"));
     console.log("  /skill            " + chalk.dim("Load/unload skill packages"));
     console.log("  /spec <desc>      " + chalk.dim("Spec-driven dev workflow"));
+    console.log("  /init             " + chalk.dim("Generate project context (.openaether.md)"));
     console.log("  /config           " + chalk.dim("Show configuration"));
     console.log("  /config key <provider> <key>" + chalk.dim("  Set an API key"));
+    console.log("  /permissions      " + chalk.dim("Show tool permission rules"));
+    console.log("  /remember <fact>  " + chalk.dim("Save a fact to memory"));
+    console.log("  /memory [clear]   " + chalk.dim("Show or clear memory"));
+    console.log("  /compact          " + chalk.dim("Compress conversation context"));
+    console.log("  /tasks            " + chalk.dim("List background subagent tasks"));
     console.log("  /clear            " + chalk.dim("Clear conversation history"));
     console.log("  /history          " + chalk.dim("Show conversation stats"));
     console.log("  /session list     " + chalk.dim("List saved sessions"));
@@ -420,10 +517,7 @@ export class REPL {
   }
 
   private async handleProviderCommand(args: string[]): Promise<void> {
-    const providers: ProviderName[] = [
-      "openai", "anthropic", "google", "ollama",
-      "openrouter", "groq", "mistral", "xai", "deepseek", "qwen", "moonshot",
-    ];
+    const providers: ProviderName[] = ALL_PROVIDERS;
 
     if (args.length === 0) {
       console.log(chalk.bold("\nAvailable Providers:"));
@@ -455,14 +549,16 @@ export class REPL {
 
   /**
    * Recreate the provider from current config and swap it into the orchestrator.
+   * Always swaps so config and runtime stay consistent; if the provider can't be
+   * created (e.g. missing API key), a NullProvider is set and the reason printed.
    */
   private reloadProvider(): void {
     const provider = createProvider(this.config);
-    if (provider.name === "none") {
-      console.log(chalk.red(`✗ ${provider.getModelName() || "Provider not configured"}`));
+    this.orchestrator.setProvider(provider);
+    if (provider instanceof NullProvider) {
+      console.log(chalk.red(`✗ ${provider.getReason()}`));
       return;
     }
-    this.orchestrator.setProvider(provider);
     console.log(chalk.dim(`  Active model: ${provider.getModelName()}`));
   }
 
@@ -600,6 +696,50 @@ export class REPL {
     }
   }
 
+  private async handleInitCommand(_args: string[]): Promise<void> {
+    console.log(chalk.bold("\n📦 Generating project context (.openaether.md)...\n"));
+
+    const INIT_PROMPT =
+      "Analyze this project and write a concise CONTEXT file (in Markdown) that will help future AI agents work here. Include:\n" +
+      "# Project\n- What this project does (from package.json, README, code)\n" +
+      "# Commands\n- Build, test, run, lint commands\n" +
+      "# Structure\n- Key directories/files and their purpose\n" +
+      "# Conventions\n- Code style, patterns, gotchas you observe\n" +
+      "Be accurate and specific. Inspect files with the Read/Glob/Grep tools to gather facts.";
+
+    const initOrchestrator = new ConversationOrchestrator(
+      this.orchestrator.getProvider(),
+      this.orchestrator.getToolRegistry(),
+      { ...this.config, systemPrompt: INIT_PROMPT },
+    );
+
+    const md = new MarkdownStream();
+    this.busy = true;
+    this.currentAbort = new AbortController();
+    try {
+      const content = await initOrchestrator.sendMessage(
+        "Analyze the current project and produce the context file.",
+        (c) => {
+          const chunk = c as { type?: string; delta?: string };
+          if (chunk.type === "text" && chunk.delta) md.write(chunk.delta);
+        },
+        this.currentAbort.signal,
+      );
+      md.flush();
+
+      const { writeFile } = await import("node:fs/promises");
+      const path = resolve(process.cwd(), ".openaether.md");
+      await writeFile(path, content, "utf-8");
+      console.log(chalk.green(`\n✅ Project context saved to ${path}`));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(chalk.red(`✗ Failed to generate context: ${msg}`));
+    } finally {
+      this.busy = false;
+      this.currentAbort = null;
+    }
+  }
+
   private async handleSessionCommand(args: string[]): Promise<void> {
     const sub = args[0]?.toLowerCase();
 
@@ -682,16 +822,13 @@ export class REPL {
       console.log("  /config              " + chalk.dim("Show current configuration"));
       console.log("  /config key <provider> <key>" + chalk.dim("  Set an API key"));
       console.log("  /config help         " + chalk.dim("Show this help"));
-      console.log(chalk.dim("\n  Providers: openai, anthropic, google, ollama"));
+      console.log(chalk.dim("\n  Providers: openai, anthropic, google, ollama, openrouter, groq, mistral, xai, deepseek, qwen, moonshot"));
       console.log(chalk.dim("  Use /provider to switch, /model to set model.\n"));
       return;
     }
 
     if (sub === "key") {
-      const providers: ProviderName[] = [
-        "openai", "anthropic", "google", "openrouter",
-        "groq", "mistral", "xai", "deepseek", "qwen", "moonshot",
-      ];
+      const providers: ProviderName[] = KEY_PROVIDERS;
 
       let provider = args[1]?.toLowerCase() as ProviderName | undefined;
 
@@ -747,10 +884,7 @@ export class REPL {
    */
   private async interactiveSetup(): Promise<void> {
     console.log(chalk.bold("\n🔧 OpenAether Setup"));
-    const providers: ProviderName[] = [
-      "openai", "anthropic", "google", "openrouter",
-      "groq", "mistral", "xai", "deepseek", "qwen", "moonshot",
-    ];
+    const providers: ProviderName[] = KEY_PROVIDERS;
 
     for (const p of providers) {
       const existing = this.config.apiKeys[p as keyof typeof this.config.apiKeys];
@@ -782,6 +916,81 @@ export class REPL {
     this.reloadProvider();
   }
 
+  /** Show the effective permission rules (global + project). */
+  private showPermissions(): void {
+    console.log(chalk.bold("\n🔐 Permissions"));
+    console.log(formatRules(this.permissions));
+    console.log(chalk.dim("\n  Configure in ~/.openaether/config.json (global) or .openaether/settings.json (project)."));
+    console.log(chalk.dim("  Patterns: Tool, Tool:substring, *  |  Deny wins over allow.\n"));
+  }
+
+  /** /remember <fact> — save a fact to persistent memory. */
+  private async handleRememberCommand(args: string[]): Promise<void> {
+    const fact = args.join(" ").trim();
+    if (!fact) {
+      console.log(chalk.yellow("  Usage: /remember <fact to remember>"));
+      return;
+    }
+    await this.memoryManager.append(fact);
+    this.orchestrator.setMemory(this.memoryManager.getContent().trim());
+    console.log(chalk.green("✓ Remembered."));
+    console.log(chalk.dim(`  (stored in ${this.memoryManager.getPath()})`));
+  }
+
+  /** /memory [list|clear] — view or clear persistent memory. */
+  private async handleMemoryCommand(args: string[]): Promise<void> {
+    const sub = args[0]?.toLowerCase();
+    await this.memoryManager.load();
+
+    if (sub === "clear") {
+      await this.memoryManager.clear();
+      this.orchestrator.setMemory("");
+      console.log(chalk.green("✓ Memory cleared."));
+      return;
+    }
+
+    const content = this.memoryManager.getContent().trim();
+    if (!content) {
+      console.log(chalk.dim("\n  Memory is empty. Save facts with /remember <fact>.\n"));
+      return;
+    }
+    console.log(chalk.bold("\n🧠 Memory"));
+    console.log(content);
+    console.log(chalk.dim(`\n  (stored in ${this.memoryManager.getPath()})\n`));
+  }
+
+  /** /compact — manually compress the conversation context. */
+  private async handleCompactCommand(): Promise<void> {
+    const before = this.orchestrator.getEstimatedTokenCount();
+    console.log(chalk.dim(`  Compressing ${before.toLocaleString()} estimated tokens...`));
+    await this.orchestrator.compact();
+    const after = this.orchestrator.getEstimatedTokenCount();
+    console.log(chalk.green(`✓ Context compacted: ${before.toLocaleString()} → ${after.toLocaleString()} tokens`));
+  }
+
+  /** /tasks — list background subagent tasks. */
+  private showTasks(): void {
+    if (!this.taskManager) {
+      console.log(chalk.dim("  Background tasks are not available in this session."));
+      return;
+    }
+    const tasks = this.taskManager.list();
+    if (tasks.length === 0) {
+      console.log(chalk.dim("  No background tasks. The AI can start them with the Task tool."));
+      return;
+    }
+    console.log(chalk.bold("\n🔄 Background Tasks"));
+    for (const t of tasks) {
+      const status = t.status === "running"
+        ? chalk.yellow("running")
+        : t.status === "done"
+          ? chalk.green("done")
+          : chalk.red("error");
+      console.log(`  ${chalk.cyan(t.id)}  ${status}  ${chalk.dim(t.subagent)}`);
+    }
+    console.log("");
+  }
+
   private showConfig(): void {
     console.log(chalk.bold("\nConfiguration:"));
     console.log(`  Provider:  ${chalk.cyan(this.config.provider.active)}`);
@@ -795,10 +1004,7 @@ export class REPL {
       return keys[provider] ? chalk.green("✓ set") : chalk.dim("not set");
     };
 
-    const keyProviders = [
-      "openai", "anthropic", "google", "openrouter",
-      "groq", "mistral", "xai", "deepseek", "qwen", "moonshot",
-    ];
+    const keyProviders: ProviderName[] = KEY_PROVIDERS;
 
     console.log(chalk.bold("\nAPI Keys:"));
     for (const p of keyProviders) {
@@ -828,6 +1034,25 @@ export class REPL {
     console.log(`  Total messages: ${history.length}`);
     console.log(`  User messages:  ${userCount}`);
     console.log(`  Assistant msgs: ${assistantCount}`);
+  }
+
+  private showCost(): void {
+    const s = this.orchestrator.getCostSummary();
+
+    console.log(chalk.bold("\n💰 Usage & Cost"));
+    console.log(`  Calls:             ${s.calls}`);
+    console.log(`  Input tokens:      ${s.totalInputTokens.toLocaleString()}`);
+    console.log(`  Output tokens:     ${s.totalOutputTokens.toLocaleString()}`);
+    console.log(`  Total tokens:      ${(s.totalInputTokens + s.totalOutputTokens).toLocaleString()}`);
+    console.log(`  Estimated cost:    ${chalk.green("$" + s.estimatedCost.toFixed(4))}`);
+
+    if (s.byModel.size > 0) {
+      console.log(chalk.dim("\n  Per model:"));
+      for (const [model, rec] of s.byModel) {
+        console.log(`    ${model}  ${chalk.dim(`${rec.inputTokens.toLocaleString()}+${rec.outputTokens.toLocaleString()} tok`)}`);
+      }
+    }
+    console.log(chalk.dim("\n  (Cost is an estimate based on public pricing.)\n"));
   }
 
   private async onExit(): Promise<void> {

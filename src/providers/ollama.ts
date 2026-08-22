@@ -34,25 +34,61 @@ export class OllamaProvider extends LLMProvider {
     return Math.ceil(text.length / 4);
   }
 
-  normalizeMessages(messages: Message[]): Array<{ role: string; content: string }> {
-    return messages.map((msg) => {
-      let content = "";
+  normalizeMessages(messages: Message[]): Array<{
+    role: string;
+    content: string;
+    tool_calls?: Array<{ function: { name: string; arguments: unknown } }>;
+  }> {
+    const result: Array<{
+      role: string;
+      content: string;
+      tool_calls?: Array<{ function: { name: string; arguments: unknown } }>;
+    }> = [];
 
+    for (const msg of messages) {
       if (typeof msg.content === "string") {
-        content = msg.content;
-      } else if (Array.isArray(msg.content)) {
-        content = (msg.content as ContentBlock[])
-          .filter((b): b is TextContent => b.type === "text")
-          .map((b) => b.text)
-          .join("\n");
+        result.push({ role: msg.role, content: msg.content });
+        continue;
       }
 
-      let role = msg.role;
-      // Ollama uses "assistant" for tool calls
-      if (role === "tool") role = "tool";
+      if (!Array.isArray(msg.content)) continue;
 
-      return { role, content };
-    });
+      const blocks = msg.content as ContentBlock[];
+
+      // Tool results → separate role:"tool" messages (Ollama's expected format)
+      const toolResults = blocks.filter((b): b is ToolResultContent => b.type === "tool_result");
+      if (toolResults.length > 0) {
+        for (const tr of toolResults) {
+          result.push({ role: "tool", content: tr.content });
+        }
+        continue;
+      }
+
+      // Assistant message with tool calls → include tool_calls so Ollama can continue the loop
+      const toolUses = blocks.filter((b): b is ToolUseContent => b.type === "tool_use");
+      const text = blocks
+        .filter((b): b is TextContent => b.type === "text")
+        .map((b) => b.text)
+        .join("\n");
+
+      const entry: {
+        role: string;
+        content: string;
+        tool_calls?: Array<{ function: { name: string; arguments: unknown } }>;
+      } = { role: msg.role === "assistant" ? "assistant" : "user", content: text };
+
+      if (toolUses.length > 0) {
+        entry.tool_calls = toolUses.map((tu) => ({
+          function: { name: tu.name, arguments: tu.input },
+        }));
+      }
+
+      if (text || toolUses.length > 0) {
+        result.push(entry);
+      }
+    }
+
+    return result;
   }
 
   async *chat(messages: Message[], options: ChatOptions): AsyncGenerator<StreamChunk> {
@@ -120,11 +156,22 @@ export class OllamaProvider extends LLMProvider {
 
             if (message?.tool_calls) {
               for (const tc of message.tool_calls) {
+                let input: Record<string, unknown> = {};
+                // Ollama may return arguments as a JSON string or as an object
+                if (typeof tc.function?.arguments === "string") {
+                  try {
+                    input = JSON.parse(tc.function.arguments);
+                  } catch {
+                    input = {};
+                  }
+                } else if (tc.function?.arguments && typeof tc.function.arguments === "object") {
+                  input = tc.function.arguments as Record<string, unknown>;
+                }
                 yield {
                   type: "tool_use",
                   id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
                   name: tc.function?.name || "",
-                  input: tc.function?.arguments || {},
+                  input,
                 };
               }
             }

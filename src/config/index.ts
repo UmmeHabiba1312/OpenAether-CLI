@@ -86,6 +86,12 @@ async function firstRunSetup(): Promise<OpenAetherConfig> {
       deepseek: process.env.DEEPSEEK_API_KEY || undefined,
       qwen: process.env.QWEN_API_KEY || undefined,
       moonshot: process.env.MOONSHOT_API_KEY || undefined,
+      together: process.env.TOGETHER_API_KEY || undefined,
+      cerebras: process.env.CEREBRAS_API_KEY || undefined,
+      fireworks: process.env.FIREWORKS_API_KEY || undefined,
+      nvidia: process.env.NVIDIA_API_KEY || undefined,
+      perplexity: process.env.PERPLEXITY_API_KEY || undefined,
+      custom: process.env.CUSTOM_API_KEY || undefined,
     },
   };
 
@@ -114,6 +120,12 @@ const API_KEY_MAP: Record<string, { field: keyof ProviderKeys; env: string }> = 
   deepseek: { field: "deepseek", env: "DEEPSEEK_API_KEY" },
   qwen: { field: "qwen", env: "QWEN_API_KEY" },
   moonshot: { field: "moonshot", env: "MOONSHOT_API_KEY" },
+  together: { field: "together", env: "TOGETHER_API_KEY" },
+  cerebras: { field: "cerebras", env: "CEREBRAS_API_KEY" },
+  fireworks: { field: "fireworks", env: "FIREWORKS_API_KEY" },
+  nvidia: { field: "nvidia", env: "NVIDIA_API_KEY" },
+  perplexity: { field: "perplexity", env: "PERPLEXITY_API_KEY" },
+  custom: { field: "custom", env: "CUSTOM_API_KEY" },
 };
 
 /**
