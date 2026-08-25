@@ -18,6 +18,7 @@ import { FireworksProvider } from "./fireworks.js";
 import { NvidiaProvider } from "./nvidia.js";
 import { PerplexityProvider } from "./perplexity.js";
 import { LMStudioProvider } from "./lmstudio.js";
+import { CohereProvider } from "./cohere.js";
 
 /**
  * A provider definition. Adding a new provider = adding one row here plus a
@@ -133,6 +134,16 @@ const PROVIDER_DEFS: ProviderDef[] = [
         "http://localhost:8080/v1";
       const model = config.provider.models.custom || "";
       return new OpenAICompatProvider("custom", key, model, baseUrl);
+    },
+  },
+  {
+    name: "cohere",
+    label: "Cohere",
+    envVar: "COHERE_API_KEY",
+    requiresKey: true,
+    create: (config) => {
+      const key = config.apiKeys.cohere || process.env.COHERE_API_KEY || "";
+      return new CohereProvider(key, config.provider.models.cohere || "");
     },
   },
 ];

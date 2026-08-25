@@ -8,6 +8,7 @@ import type {
   TextContent,
   ToolUseContent,
   ToolResultContent,
+  ImageContent,
 } from "./interface.js";
 import type { ToolDefinition } from "../config/types.js";
 
@@ -101,6 +102,26 @@ export class OpenAICompatProvider extends LLMProvider {
           }));
         }
         result.push(assistantMsg);
+        continue;
+      }
+
+      // User message with mixed content (text + images)
+      const imageBlocks = blocks.filter((b): b is ImageContent => b.type === "image");
+      if (imageBlocks.length > 0) {
+        const parts: Array<{
+          type: "text" | "image_url";
+          text?: string;
+          image_url?: { url: string };
+        }> = [];
+        const text = textBlocks.map((b) => b.text).join("");
+        if (text) parts.push({ type: "text", text });
+        for (const img of imageBlocks) {
+          parts.push({
+            type: "image_url",
+            image_url: { url: `data:${img.mimeType};base64,${img.data}` },
+          });
+        }
+        result.push({ role: "user", content: parts as OpenAI.Chat.ChatCompletionContentPart[] });
         continue;
       }
 

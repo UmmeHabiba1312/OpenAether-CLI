@@ -16,7 +16,8 @@ export type ProviderName =
   | "nvidia"
   | "perplexity"
   | "lmstudio"
-  | "custom";
+  | "custom"
+  | "cohere";
 
 // ─── Tool Types ─────────────────────────────────────────────────────────────
 
@@ -55,6 +56,8 @@ export interface ProviderKeys {
   lmstudio?: string;
   /** API key for a custom OpenAI-compatible endpoint. */
   custom?: string;
+  /** Cohere API key. */
+  cohere?: string;
   /** Base URL for the custom OpenAI-compatible endpoint. */
   customBaseUrl?: string;
   /** Base URL for Ollama (default: http://localhost:11434) */
@@ -162,6 +165,7 @@ export const DEFAULT_CONFIG: OpenAetherConfig = {
       perplexity: "sonar",
       lmstudio: "local-model",
       custom: "gpt-4o",
+      cohere: "command-r-plus",
     },
   },
   systemPrompt: "You are OpenAether, an open-source AI coding assistant. Help the user with software engineering tasks. Be concise, thorough, and practical.",

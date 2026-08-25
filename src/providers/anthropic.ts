@@ -8,6 +8,7 @@ import type {
   TextContent,
   ToolUseContent,
   ToolResultContent,
+  ImageContent,
 } from "./interface.js";
 import type { ToolDefinition } from "../config/types.js";
 
@@ -69,6 +70,17 @@ export class AnthropicProvider extends LLMProvider {
               content: tr.content,
               is_error: tr.isError,
             } satisfies Anthropic.Messages.ToolResultBlockParam;
+          }
+          if (block.type === "image") {
+            const img = block as ImageContent;
+            return {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: img.mimeType as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+                data: img.data,
+              },
+            } satisfies Anthropic.Messages.ImageBlockParam;
           }
           return { type: "text", text: "" };
         });

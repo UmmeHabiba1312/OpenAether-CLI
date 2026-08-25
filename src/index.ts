@@ -20,51 +20,49 @@ import { makeSpawnSubagentTool } from "./subagents/index.js";
 import { REPL } from "./cli.js";
 import { runPrintMode, type PrintApp } from "./print.js";
 import { MemoryManager } from "./memory/index.js";
-import { loadPermissions } from "./permissions/index.js";
+import { loadPermissions, decide } from "./permissions/index.js";
 import { loadHooks, HookRunner } from "./hooks/index.js";
 import { TaskManager } from "./tasks/index.js";
-import { decide } from "./permissions/index.js";
 import type { ToolApprovalFn } from "./orchestrator/conversation.js";
+import { renderBanner, statusLine, okLine, errorLine, center } from "./ui/banner.js";
 
-const BANNER = `
-  ┌────────────────────────────────────────┐
-  │           ${chalk.cyan("OpenAether")}               │
-  │  ${chalk.dim("Open-source AI CLI assistant")}   │
-  │    ${chalk.dim("Works with any LLM provider")}     │
-  └────────────────────────────────────────┘
-`;
+const VERSION = "0.1.0";
 
 function showHelp(): void {
-  console.log(BANNER);
-  console.log(chalk.bold("\nUsage:"));
+  console.log(renderBanner(VERSION));
+  console.log(chalk.bold("\n" + center("USAGE", 46)));
   console.log("  openaether              " + chalk.dim("Start interactive REPL"));
   console.log("  openaether -p <prompt>  " + chalk.dim("One-shot print mode (non-interactive)"));
-  console.log("  openaether --help       " + chalk.dim("Show this help message"));
-  console.log("  openaether --version    " + chalk.dim("Show version"));
+  console.log("  openaether --help      " + chalk.dim("Show this help message"));
+  console.log("  openaether --version   " + chalk.dim("Show version"));
 
-  console.log(chalk.bold("\nOptions:"));
-  console.log("  -p, --print <prompt>      " + chalk.dim("Run one message and print the result (reads stdin if no prompt)"));
+  console.log(chalk.bold("\n" + center("OPTIONS", 46)));
+  console.log("  -p, --print <prompt>      " + chalk.dim("Run one message and print the result"));
   console.log("  --continue, --resume      " + chalk.dim("Resume the most recent session (with -p)"));
-  console.log("  --output-format <fmt>     " + chalk.dim("Output format: text (default) or json"));
-  console.log("  --dangerously-skip-permissions" + chalk.dim("  Auto-approve all tool calls (print mode only)"));
+  console.log("  --output-format <fmt>     " + chalk.dim("Output: text (default) or json"));
+  console.log("  --dangerously-skip-permissions" + chalk.dim("  Auto-approve all tool calls (print mode)"));
+  console.log("  --image <path>            " + chalk.dim("Attach an image (repeatable, with -p)"));
 
-  console.log(chalk.bold("\nCommands (inside REPL):"));
+  console.log(chalk.bold("\n" + center("REPL COMMANDS", 46)));
   console.log("  /help       " + chalk.dim("Show available commands"));
-  console.log("  /model      " + chalk.dim("Switch AI model"));
+  console.log("  /provider   " + chalk.dim("List or switch provider"));
+  console.log("  /model      " + chalk.dim("Show or set the model"));
   console.log("  /config     " + chalk.dim("View or change configuration"));
-  console.log("  /permissions" + chalk.dim("Show tool permission rules"));
+  console.log("  /permissions" + chalk.dim("  Show tool permission rules"));
   console.log("  /remember   " + chalk.dim("Save a fact to memory"));
-  console.log("  /memory     " + chalk.dim("Show/clear memory"));
+  console.log("  /memory     " + chalk.dim("Show or clear memory"));
   console.log("  /compact    " + chalk.dim("Compress conversation context"));
   console.log("  /tasks      " + chalk.dim("List background subagent tasks"));
   console.log("  /clear      " + chalk.dim("Clear conversation history"));
+  console.log("  /cost       " + chalk.dim("Show token usage & estimated cost"));
+  console.log("  /image      " + chalk.dim("Attach an image to the next message"));
   console.log("  /exit       " + chalk.dim("Exit OpenAether"));
 
-  console.log(chalk.bold("\nEnvironment Variables:"));
+  console.log(chalk.bold("\n" + center("ENVIRONMENT VARIABLES", 46)));
   console.log("  OPENAI_API_KEY          " + chalk.dim("OpenAI"));
   console.log("  ANTHROPIC_API_KEY       " + chalk.dim("Anthropic Claude"));
   console.log("  GOOGLE_API_KEY          " + chalk.dim("Google Gemini"));
-  console.log("  OPENROUTER_API_KEY      " + chalk.dim("OpenRouter (300+ models)"));
+  console.log("  OPENROUTER_API_KEY      " + chalk.dim("OpenRouter"));
   console.log("  GROQ_API_KEY            " + chalk.dim("Groq"));
   console.log("  MISTRAL_API_KEY         " + chalk.dim("Mistral"));
   console.log("  XAI_API_KEY             " + chalk.dim("xAI (Grok)"));
@@ -76,9 +74,8 @@ function showHelp(): void {
   console.log("  FIREWORKS_API_KEY       " + chalk.dim("Fireworks AI"));
   console.log("  NVIDIA_API_KEY          " + chalk.dim("NVIDIA NIM"));
   console.log("  PERPLEXITY_API_KEY      " + chalk.dim("Perplexity"));
+  console.log("  COHERE_API_KEY          " + chalk.dim("Cohere"));
   console.log("  CUSTOM_API_KEY          " + chalk.dim("Custom OpenAI-compatible endpoint"));
-
-  console.log(chalk.dim("\nOpenAether v0.1.0"));
 }
 
 function showVersion(): void {
@@ -213,32 +210,26 @@ async function main(): Promise<void> {
   }
 
   // Interactive REPL
-  console.log(BANNER);
+  console.log(renderBanner(VERSION));
   console.log(chalk.dim("Starting OpenAether..."));
 
-  console.log(chalk.green("✓ Configuration loaded"));
-  console.log(`  Provider: ${chalk.cyan(config.provider.active)}`);
-  console.log(`  Model:    ${chalk.cyan(getActiveModel(config))}`);
+  const providerCount = 0; // registry knows this
+  console.log(statusLine("Provider", config.provider.active, chalk.dim("(" + getActiveModel(config) + ")")));
+  console.log(okLine(`${app.toolRegistry.getAll().length} tools registered`));
 
   const key = getActiveApiKey(config);
-
-  console.log(chalk.green(`✓ ${app.toolRegistry.getAll().length} tools registered`));
-
-  const missingKey = !key && config.provider.active !== "ollama" && config.provider.active !== "lmstudio";
-  if (missingKey) {
-    console.log(`  API Key:  ${chalk.red("✗ not set")}`);
-    console.log(chalk.dim("  Set the API key env var or edit ~/.openaether/config.json"));
-    console.log(chalk.dim("  AI features won't work until configured.\n"));
-  } else if (config.provider.active !== "ollama" && config.provider.active !== "lmstudio") {
-    console.log(`  API Key:  ${chalk.green("✓ configured")}`);
+  const isLocal = config.provider.active === "ollama" || config.provider.active === "lmstudio";
+  if (isLocal) {
+    console.log(statusLine("API Key", "local", chalk.dim("(not needed)")));
+  } else if (key) {
+    console.log(statusLine("API Key", "configured", chalk.green("✓")));
   } else {
-    console.log(`  API Key:  ${chalk.dim("(not needed for local providers)")}`);
+    console.log(statusLine("API Key", "not set", chalk.red("✗")));
+    console.log(chalk.dim("     Set env var or run /config key " + config.provider.active));
   }
 
   if (app.mcp.getConnectionCount() > 0) {
-    console.log(chalk.green(`✓ ${app.mcp.getConnectionCount()} MCP server(s) connected`));
-  } else if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
-    console.log(chalk.dim("  No MCP tools loaded (servers may have failed)."));
+    console.log(okLine(`${app.mcp.getConnectionCount()} MCP server(s) connected`));
   }
 
   // Warnings if provider not usable
@@ -246,7 +237,7 @@ async function main(): Promise<void> {
     const reason = "getReason" in provider
       ? (provider as unknown as { getReason(): string }).getReason()
       : "Provider not configured";
-    console.log(chalk.red(`✗ ${reason}`));
+    console.log(errorLine(reason));
   }
 
   console.log(chalk.yellow("\nOpenAether is ready!"));

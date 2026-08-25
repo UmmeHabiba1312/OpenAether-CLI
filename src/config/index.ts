@@ -92,6 +92,7 @@ async function firstRunSetup(): Promise<OpenAetherConfig> {
       nvidia: process.env.NVIDIA_API_KEY || undefined,
       perplexity: process.env.PERPLEXITY_API_KEY || undefined,
       custom: process.env.CUSTOM_API_KEY || undefined,
+      cohere: process.env.COHERE_API_KEY || undefined,
     },
   };
 
@@ -126,6 +127,7 @@ const API_KEY_MAP: Record<string, { field: keyof ProviderKeys; env: string }> = 
   nvidia: { field: "nvidia", env: "NVIDIA_API_KEY" },
   perplexity: { field: "perplexity", env: "PERPLEXITY_API_KEY" },
   custom: { field: "custom", env: "CUSTOM_API_KEY" },
+  cohere: { field: "cohere", env: "COHERE_API_KEY" },
 };
 
 /**

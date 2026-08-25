@@ -8,6 +8,7 @@ import type {
   ToolUseContent,
   ToolResultContent,
   TextContent,
+  ImageContent,
 } from "./interface.js";
 import type { ToolDefinition } from "../config/types.js";
 
@@ -68,6 +69,9 @@ export class GoogleProvider extends LLMProvider {
         for (const block of msg.content as ContentBlock[]) {
           if (block.type === "text") {
             parts.push({ text: (block as TextContent).text });
+          } else if (block.type === "image") {
+            const img = block as ImageContent;
+            parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
           } else if (block.type === "tool_use") {
             const tu = block as ToolUseContent;
             // Remember the function name for this tool call id

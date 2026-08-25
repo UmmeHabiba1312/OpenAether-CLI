@@ -7,6 +7,7 @@ import type {
   ToolUseContent,
   ToolResultContent,
   TextContent,
+  ImageContent,
 } from "./interface.js";
 import type { ToolDefinition } from "../config/types.js";
 
@@ -37,11 +38,13 @@ export class OllamaProvider extends LLMProvider {
   normalizeMessages(messages: Message[]): Array<{
     role: string;
     content: string;
+    images?: string[];
     tool_calls?: Array<{ function: { name: string; arguments: unknown } }>;
   }> {
     const result: Array<{
       role: string;
       content: string;
+      images?: string[];
       tool_calls?: Array<{ function: { name: string; arguments: unknown } }>;
     }> = [];
 
@@ -66,6 +69,9 @@ export class OllamaProvider extends LLMProvider {
 
       // Assistant message with tool calls → include tool_calls so Ollama can continue the loop
       const toolUses = blocks.filter((b): b is ToolUseContent => b.type === "tool_use");
+      const images = blocks
+        .filter((b): b is ImageContent => b.type === "image")
+        .map((b) => b.data);
       const text = blocks
         .filter((b): b is TextContent => b.type === "text")
         .map((b) => b.text)
@@ -74,8 +80,13 @@ export class OllamaProvider extends LLMProvider {
       const entry: {
         role: string;
         content: string;
+        images?: string[];
         tool_calls?: Array<{ function: { name: string; arguments: unknown } }>;
       } = { role: msg.role === "assistant" ? "assistant" : "user", content: text };
+
+      if (images.length > 0) {
+        entry.images = images;
+      }
 
       if (toolUses.length > 0) {
         entry.tool_calls = toolUses.map((tu) => ({
@@ -83,7 +94,7 @@ export class OllamaProvider extends LLMProvider {
         }));
       }
 
-      if (text || toolUses.length > 0) {
+      if (text || images.length > 0 || toolUses.length > 0) {
         result.push(entry);
       }
     }

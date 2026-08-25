@@ -62,7 +62,7 @@ export class REPL {
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: chalk.green("› ") + chalk.dim("openaether") + " ",
+      prompt: chalk.cyan("openaether") + " " + chalk.green("› ") + " ",
       terminal: true,
       historySize: 100,
     });
@@ -264,7 +264,7 @@ export class REPL {
     }
 
     await this.handleMessage(trimmed);
-    this.rl.setPrompt(chalk.green("› ") + chalk.dim("openaether") + " ");
+    this.rl.setPrompt(chalk.cyan("openaether") + " " + chalk.green("› ") + " ");
     this.promptSafe();
   }
 
@@ -320,7 +320,7 @@ export class REPL {
           // Stop spinner on first text, then stream inline
           if (this.spinner.isRunning()) {
             this.spinner.stop();
-            process.stdout.write(chalk.cyan("\nOpenAether › ") + "\n");
+            process.stdout.write(chalk.dim("\n") + chalk.cyan("OpenAether") + " " + chalk.green("› ") + " ");
           }
           md.write(chunk.delta);
           break;
@@ -353,7 +353,7 @@ export class REPL {
     };
 
     try {
-      const text = await this.orchestrator.sendMessage(input, onStream, this.currentAbort.signal);
+      await this.orchestrator.sendMessage(input, onStream, this.currentAbort.signal);
       if (this.spinner.isRunning()) this.spinner.stop();
       md.flush();
       process.stdout.write("\n");
@@ -473,13 +473,14 @@ export class REPL {
   // ── Command handlers ──────────────────────────────────────────────────────
 
   private showHelp(): void {
-    console.log(chalk.bold("\nOpenAether Commands:"));
+    console.log(chalk.bold("\n" + chalk.cyan("OpenAether Commands:")));
     console.log("  /help             " + chalk.dim("Show this help message"));
     console.log("  /provider         " + chalk.dim("List or switch provider"));
     console.log("  /model <name>     " + chalk.dim("Show or set the model"));
     console.log("  /skill            " + chalk.dim("Load/unload skill packages"));
     console.log("  /spec <desc>      " + chalk.dim("Spec-driven dev workflow"));
     console.log("  /init             " + chalk.dim("Generate project context (.openaether.md)"));
+    console.log("  /image <path>     " + chalk.dim("Attach an image to the next message"));
     console.log("  /config           " + chalk.dim("Show configuration"));
     console.log("  /config key <provider> <key>" + chalk.dim("  Set an API key"));
     console.log("  /permissions      " + chalk.dim("Show tool permission rules"));
@@ -495,7 +496,7 @@ export class REPL {
     console.log("  /session delete <name>" + chalk.dim("  Delete a session"));
     console.log("  /exit             " + chalk.dim("Exit OpenAether"));
 
-    console.log(chalk.bold("\nHow to use:"));
+    console.log(chalk.bold("\n" + chalk.cyan("How to use:")));
     console.log("  Type a message and press Enter to chat.");
     console.log("  Press Ctrl+C to cancel, Ctrl+D to exit.\n");
   }
@@ -822,7 +823,7 @@ export class REPL {
       console.log("  /config              " + chalk.dim("Show current configuration"));
       console.log("  /config key <provider> <key>" + chalk.dim("  Set an API key"));
       console.log("  /config help         " + chalk.dim("Show this help"));
-      console.log(chalk.dim("\n  Providers: openai, anthropic, google, ollama, openrouter, groq, mistral, xai, deepseek, qwen, moonshot"));
+      console.log(chalk.dim(`\n  Providers: ${ALL_PROVIDERS.join(", ")}`));
       console.log(chalk.dim("  Use /provider to switch, /model to set model.\n"));
       return;
     }

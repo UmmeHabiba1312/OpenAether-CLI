@@ -23,7 +23,15 @@ export interface ToolResultContent {
   isError?: boolean;
 }
 
-export type ContentBlock = TextContent | ToolUseContent | ToolResultContent;
+export interface ImageContent {
+  type: "image";
+  /** MIME type, e.g. "image/png", "image/jpeg". */
+  mimeType: string;
+  /** Base64-encoded image data. */
+  data: string;
+}
+
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | ImageContent;
 
 export interface Message {
   role: Role;
